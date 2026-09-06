@@ -1,0 +1,37 @@
+{
+  "$schema": "./pack.schema.json",
+  "id": "moon-outpost",
+  "name": "月面哨站示例包",
+  "tableTitle": "月面哨站",
+  "version": 1,
+  "cardBack": {
+    "label": "LUNA",
+    "theme": "moon-lattice",
+    "color": "#536a78"
+  },
+  "die": {
+    "label": "任务 D12",
+    "sides": 12
+  },
+  "counter": {
+    "label": "氧气",
+    "initial": 12,
+    "min": 0,
+    "max": 12
+  },
+  "tokens": [
+    { "key": "oxygen", "label": "氧气舱", "symbol": "O₂", "color": "#25b8b0", "x": 420, "y": 560 },
+    { "key": "signal", "label": "信号标记", "symbol": "◈", "color": "#4388ff", "x": 530, "y": 560 },
+    { "key": "alarm", "label": "警报标记", "symbol": "!", "color": "#ff6247", "x": 640, "y": 560 }
+  ],
+  "cards": [
+    { "key": "commander", "label": "指挥官", "rank": "01", "suit": "crew", "symbol": "✦", "tone": "black" },
+    { "key": "engineer", "label": "工程师", "rank": "02", "suit": "crew", "symbol": "⚙", "tone": "black" },
+    { "key": "medic", "label": "医疗官", "rank": "03", "suit": "crew", "symbol": "✚", "tone": "red" },
+    { "key": "navigator", "label": "导航员", "rank": "04", "suit": "crew", "symbol": "◈", "tone": "black" },
+    { "key": "scientist", "label": "科研员", "rank": "05", "suit": "crew", "symbol": "⌬", "tone": "black" },
+    { "key": "operator", "label": "通讯员", "rank": "06", "suit": "crew", "symbol": "⌁", "tone": "black" },
+    { "key": "security", "label": "安保员", "rank": "07", "suit": "crew", "symbol": "◆", "tone": "red" },
+    { "key": "observer", "label": "观察员", "rank": "08", "suit": "crew", "symbol": "◉", "tone": "black" }
+  ]
+}

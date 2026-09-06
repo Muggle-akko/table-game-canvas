@@ -1,0 +1,37 @@
+{
+  "$schema": "./pack.schema.json",
+  "id": "parlor-eight",
+  "name": "牌室示例牌",
+  "tableTitle": "朋友牌室",
+  "version": 1,
+  "cardBack": {
+    "label": "PARLOR",
+    "theme": "vermillion-lattice",
+    "color": "#c94d3d"
+  },
+  "die": {
+    "label": "公共 D6",
+    "sides": 6
+  },
+  "counter": {
+    "label": "回合",
+    "initial": 1,
+    "min": 1,
+    "max": 99
+  },
+  "tokens": [
+    { "key": "first-player", "label": "起始玩家", "symbol": "Ⅰ", "color": "#e9b94d", "x": 420, "y": 560 },
+    { "key": "focus", "label": "焦点标记", "symbol": "◆", "color": "#4388ff", "x": 530, "y": 560 },
+    { "key": "danger", "label": "危险标记", "symbol": "!", "color": "#ff6247", "x": 640, "y": 560 }
+  ],
+  "cards": [
+    { "key": "heart-a", "label": "红桃 A", "rank": "A", "suit": "hearts", "symbol": "♥", "tone": "red" },
+    { "key": "spade-k", "label": "黑桃 K", "rank": "K", "suit": "spades", "symbol": "♠", "tone": "black" },
+    { "key": "diamond-q", "label": "方块 Q", "rank": "Q", "suit": "diamonds", "symbol": "♦", "tone": "red" },
+    { "key": "club-j", "label": "梅花 J", "rank": "J", "suit": "clubs", "symbol": "♣", "tone": "black" },
+    { "key": "heart-10", "label": "红桃 10", "rank": "10", "suit": "hearts", "symbol": "♥", "tone": "red" },
+    { "key": "spade-9", "label": "黑桃 9", "rank": "9", "suit": "spades", "symbol": "♠", "tone": "black" },
+    { "key": "diamond-8", "label": "方块 8", "rank": "8", "suit": "diamonds", "symbol": "♦", "tone": "red" },
+    { "key": "club-7", "label": "梅花 7", "rank": "7", "suit": "clubs", "symbol": "♣", "tone": "black" }
+  ]
+}

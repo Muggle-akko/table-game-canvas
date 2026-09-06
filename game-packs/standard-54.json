@@ -1,0 +1,456 @@
+{
+  "$schema": "./pack.schema.json",
+  "id": "standard-54",
+  "name": "标准扑克 54 张",
+  "tableTitle": "自由牌桌",
+  "version": 1,
+  "cardBack": {
+    "label": "STANDARD",
+    "theme": "midnight-grid",
+    "color": "#243f68"
+  },
+  "die": {
+    "label": "公共 D6",
+    "sides": 6
+  },
+  "counter": {
+    "label": "回合",
+    "initial": 1,
+    "min": 1,
+    "max": 999
+  },
+  "cards": [
+    {
+      "key": "hearts-a",
+      "label": "红桃 A",
+      "rank": "A",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-2",
+      "label": "红桃 2",
+      "rank": "2",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-3",
+      "label": "红桃 3",
+      "rank": "3",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-4",
+      "label": "红桃 4",
+      "rank": "4",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-5",
+      "label": "红桃 5",
+      "rank": "5",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-6",
+      "label": "红桃 6",
+      "rank": "6",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-7",
+      "label": "红桃 7",
+      "rank": "7",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-8",
+      "label": "红桃 8",
+      "rank": "8",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-9",
+      "label": "红桃 9",
+      "rank": "9",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-10",
+      "label": "红桃 10",
+      "rank": "10",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-j",
+      "label": "红桃 J",
+      "rank": "J",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-q",
+      "label": "红桃 Q",
+      "rank": "Q",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "hearts-k",
+      "label": "红桃 K",
+      "rank": "K",
+      "suit": "hearts",
+      "symbol": "♥",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-a",
+      "label": "方块 A",
+      "rank": "A",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-2",
+      "label": "方块 2",
+      "rank": "2",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-3",
+      "label": "方块 3",
+      "rank": "3",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-4",
+      "label": "方块 4",
+      "rank": "4",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-5",
+      "label": "方块 5",
+      "rank": "5",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-6",
+      "label": "方块 6",
+      "rank": "6",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-7",
+      "label": "方块 7",
+      "rank": "7",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-8",
+      "label": "方块 8",
+      "rank": "8",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-9",
+      "label": "方块 9",
+      "rank": "9",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-10",
+      "label": "方块 10",
+      "rank": "10",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-j",
+      "label": "方块 J",
+      "rank": "J",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-q",
+      "label": "方块 Q",
+      "rank": "Q",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "diamonds-k",
+      "label": "方块 K",
+      "rank": "K",
+      "suit": "diamonds",
+      "symbol": "♦",
+      "tone": "red"
+    },
+    {
+      "key": "clubs-a",
+      "label": "梅花 A",
+      "rank": "A",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-2",
+      "label": "梅花 2",
+      "rank": "2",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-3",
+      "label": "梅花 3",
+      "rank": "3",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-4",
+      "label": "梅花 4",
+      "rank": "4",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-5",
+      "label": "梅花 5",
+      "rank": "5",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-6",
+      "label": "梅花 6",
+      "rank": "6",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-7",
+      "label": "梅花 7",
+      "rank": "7",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-8",
+      "label": "梅花 8",
+      "rank": "8",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-9",
+      "label": "梅花 9",
+      "rank": "9",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-10",
+      "label": "梅花 10",
+      "rank": "10",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-j",
+      "label": "梅花 J",
+      "rank": "J",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-q",
+      "label": "梅花 Q",
+      "rank": "Q",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "clubs-k",
+      "label": "梅花 K",
+      "rank": "K",
+      "suit": "clubs",
+      "symbol": "♣",
+      "tone": "black"
+    },
+    {
+      "key": "spades-a",
+      "label": "黑桃 A",
+      "rank": "A",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-2",
+      "label": "黑桃 2",
+      "rank": "2",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-3",
+      "label": "黑桃 3",
+      "rank": "3",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-4",
+      "label": "黑桃 4",
+      "rank": "4",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-5",
+      "label": "黑桃 5",
+      "rank": "5",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-6",
+      "label": "黑桃 6",
+      "rank": "6",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-7",
+      "label": "黑桃 7",
+      "rank": "7",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-8",
+      "label": "黑桃 8",
+      "rank": "8",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-9",
+      "label": "黑桃 9",
+      "rank": "9",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-10",
+      "label": "黑桃 10",
+      "rank": "10",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-j",
+      "label": "黑桃 J",
+      "rank": "J",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-q",
+      "label": "黑桃 Q",
+      "rank": "Q",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "spades-k",
+      "label": "黑桃 K",
+      "rank": "K",
+      "suit": "spades",
+      "symbol": "♠",
+      "tone": "black"
+    },
+    {
+      "key": "joker-black",
+      "label": "小王",
+      "rank": "JOKER",
+      "suit": "joker",
+      "symbol": "☆",
+      "tone": "black"
+    },
+    {
+      "key": "joker-red",
+      "label": "大王",
+      "rank": "JOKER",
+      "suit": "joker",
+      "symbol": "★",
+      "tone": "red"
+    }
+  ]
+}

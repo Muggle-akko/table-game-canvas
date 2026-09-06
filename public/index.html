@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#173f35" />
+    <meta
+      name="description"
+      content="拿出牌，掷个骰，和朋友消磨一小会儿。Parlor 是一张可以一起布置、随便玩的 2D 自由桌面。"
+    />
+    <title>Parlor · 朋友的自由桌面</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script defer src="./phosphor-icons.js"></script>
+    <script defer src="./tabletop-engine.js"></script>
+    <script defer src="./builtin-packs.js"></script>
+    <script defer src="./preview-engine.js"></script>
+    <script defer src="./vault.js"></script>
+    <script defer src="./workspace-ui.js"></script>
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <section id="welcome-screen" class="gate-screen welcome-screen is-hidden">
+      <div class="welcome-card welcome-card--minimal">
+        <div class="welcome-copy">
+          <div class="brand-mark" aria-hidden="true"><span>P</span></div>
+          <p class="eyebrow">PARLOR</p>
+          <h1>随便玩，<br />一起就好。</h1>
+          <div class="welcome-actions">
+            <label class="welcome-pack" for="demo-pack">
+              <span>选副牌</span>
+              <select id="demo-pack">
+                <option value="standard-54">标准扑克 · 54 张</option>
+                <option value="uno">UNO · 108 张</option>
+                <option value="moon-outpost">月面哨站 · 小小冒险</option>
+              </select>
+            </label>
+            <button id="start-demo" class="primary-button welcome-primary" type="button">
+              <span>开始试玩</span><i data-ph="arrow-right"></i>
+            </button>
+          </div>
+          <button id="welcome-host-help" class="text-button" type="button">和朋友玩 <span>↗</span></button>
+        </div>
+        <div class="welcome-playground" aria-label="桌面资源预览">
+          <div id="welcome-resources" class="welcome-resources"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="boot-screen" class="gate-screen">
+      <div class="gate-card gate-card--compact">
+        <div class="brand-mark" aria-hidden="true"><span>P</span></div>
+        <h1>正在连接</h1>
+        <div class="loading-line" aria-hidden="true"><span></span></div>
+      </div>
+    </section>
+
+    <section id="offline-screen" class="gate-screen is-hidden" aria-live="polite">
+      <div class="gate-card">
+        <div class="status-stamp status-stamp--offline" aria-hidden="true"><i data-ph="warning-circle"></i></div>
+        <h1>房间暂不可用</h1>
+        <p id="offline-message" class="gate-copy">
+          没能联系到房主。请确认房主的开房命令仍在运行，或向房主索取新链接。
+        </p>
+        <button id="retry-room" class="primary-button" type="button">重试</button>
+      </div>
+    </section>
+
+    <section id="join-screen" class="gate-screen is-hidden">
+      <div class="gate-card join-card">
+        <div class="join-card__masthead">
+          <div class="brand-mark" aria-hidden="true"><span>P</span></div>
+          <div>
+            <h1 id="join-room-name">加入朋友牌室</h1>
+          </div>
+        </div>
+        <p id="join-room-meta" class="join-room-meta">正在读取牌桌信息…</p>
+        <form id="join-form" class="join-form">
+          <label for="display-name">名字</label>
+          <div class="join-form__row">
+            <input
+              id="display-name"
+              name="displayName"
+              type="text"
+              maxlength="20"
+              autocomplete="nickname"
+              placeholder="你的名字"
+            />
+            <button class="primary-button" type="submit">坐下</button>
+          </div>
+          <p id="join-error" class="form-error" role="alert"></p>
+        </form>
+      </div>
+    </section>
+
+    <div id="room-screen" class="room-shell is-hidden">
+      <header class="topbar">
+        <div class="topbar__brand">
+          <div class="brand-mark brand-mark--small" aria-hidden="true"><span>P</span></div>
+          <div class="room-identity">
+            <div class="room-title-line">
+              <span class="wordmark">Parlor</span><span class="room-title-divider">/</span>
+              <strong id="room-title">朋友牌室</strong>
+            </div>
+          </div>
+        </div>
+
+        <div id="mobile-player-strip" class="mobile-player-strip" aria-label="在座玩家快捷定位"></div>
+
+        <div class="topbar__actions">
+          <select id="presence-select" class="presence-select" aria-label="我的桌边状态"><option>在桌边</option><option>摸鱼中</option><option>离开一下</option><option>等人中</option></select>
+          <div class="topbar__status" aria-live="polite">
+            <span id="connection-dot" class="connection-dot" role="status" aria-label="正在连接" title="正在连接"></span>
+            <span id="identity-chip" class="identity-chip"><i></i><span>玩家</span></span>
+          </div>
+          <button id="preview-role" class="icon-button preview-role is-hidden" type="button" title="切换试玩视角">
+            <i data-ph="arrows-left-right"></i><b>切换视角</b>
+          </button>
+          <button id="toggle-focus" class="icon-button" type="button" aria-pressed="false" data-tooltip="沉浸桌面 · H" aria-label="沉浸桌面（H）">
+            <i data-ph="corners-out"></i><b>沉浸</b>
+          </button>
+          <button id="open-help" class="icon-button" type="button" aria-controls="help-panel" aria-expanded="false" data-tooltip="操作帮助 · ?" aria-label="操作帮助（?）">
+            <i data-ph="question"></i><b>帮助</b>
+          </button>
+          <button id="copy-link" class="invite-button" type="button" data-tooltip="复制邀请链接">
+            <i data-ph="share-network"></i><b id="copy-link-label">邀请</b>
+          </button>
+          <button id="open-saves" class="icon-button" type="button" aria-controls="saves-panel" aria-expanded="false" aria-label="桌面存档" data-tooltip="存档 · Ctrl / ⌘ S"><i data-ph="arrow-line-down"></i><b>存档</b></button>
+        </div>
+      </header>
+
+      <main class="table-stage">
+        <div id="viewport" class="viewport" aria-label="共享桌游桌面">
+          <div id="world" class="world">
+            <div class="world-border" aria-hidden="true"></div>
+            <section id="public-zone" class="table-zone public-zone">
+              <div class="zone-label"><strong>主桌</strong></div>
+              <div class="public-zone__seal" aria-hidden="true"><span>PARLOR</span></div>
+            </section>
+            <div id="hand-zones" class="hand-zones"></div>
+            <div id="deck-root" class="deck-root"></div>
+            <div id="token-root" class="token-root"></div>
+            <div id="objects-root" class="objects-root"></div>
+            <div id="cards-root" class="cards-root"></div>
+            <div id="remote-drag-root" class="remote-drag-root"></div>
+            <div id="cursor-root" class="cursor-root"></div>
+            <div id="ping-root" class="ping-root" aria-live="polite"></div>
+            <div id="drag-root" class="drag-root"></div>
+          </div>
+          <div id="local-cursor-root" class="local-cursor-root" aria-hidden="true"></div>
+        </div>
+        <button id="turn-banner" class="turn-banner is-hidden" type="button" aria-label="定位到当前行动玩家">
+          <i aria-hidden="true"></i><strong id="turn-banner-name">当前行动</strong>
+        </button>
+
+        <nav class="table-rail" aria-label="桌面快捷工具">
+          <div class="table-rail__group">
+            <button id="open-library" class="rail-button" type="button" aria-controls="library-panel" aria-expanded="false" data-tooltip="资源库 · B" aria-label="打开资源库">
+              <i data-ph="package"></i><b>资源</b>
+            </button>
+            <button id="open-world" class="rail-button" type="button" aria-controls="world-panel" aria-expanded="false" data-tooltip="桌面导航" aria-label="桌面导航"><i data-ph="crosshair"></i><b>世界</b></button>
+            <button id="open-chat" class="rail-button" type="button" aria-controls="chat-panel" aria-expanded="false" data-tooltip="聊天 · C" aria-label="聊天"><i data-ph="users-three"></i><b>聊天</b><span id="chat-unread" class="chat-unread is-hidden"></span></button>
+          </div>
+          <div class="table-rail__divider" aria-hidden="true"></div>
+          <div class="table-rail__group">
+            <button id="quick-undo" class="rail-button" type="button" data-tooltip="撤销上一步 · U" aria-label="撤销上一步">
+              <i data-ph="arrow-counter-clockwise"></i><b>撤销</b>
+            </button>
+            <button id="ping-location" class="rail-button rail-button--accent" type="button" data-tooltip="标记这里，让所有人看到 · P" aria-label="标记这里，让所有玩家看到（P）">
+              <i data-ph="cursor-click"></i><b>标记</b>
+            </button>
+            <button id="open-tools" class="rail-button" type="button" aria-controls="tools-panel" aria-expanded="false" data-tooltip="桌面工具" aria-label="打开桌面工具">
+              <i data-ph="sliders-horizontal"></i><b>工具</b>
+            </button>
+          </div>
+        </nav>
+
+        <section id="selection-dock" class="selection-dock is-hidden" aria-label="已选资源操作">
+          <button id="selection-close" class="selection-dock__close" type="button" aria-label="取消选择"><i data-ph="x"></i></button>
+          <div class="selection-dock__copy">
+            <small id="selection-meta">已选择</small>
+            <strong id="selection-title">资源</strong>
+          </div>
+          <div id="selection-actions" class="selection-dock__actions"></div>
+          <div id="selection-transfer" class="selection-dock__transfer is-hidden">
+            <select id="selection-player" aria-label="选择接收玩家"></select>
+            <button id="selection-send" type="button">交给</button>
+          </div>
+        </section>
+
+        <div class="zoom-controls" aria-label="画布缩放">
+          <button id="zoom-out" type="button" aria-label="缩小" data-tooltip="缩小"><i data-ph="minus"></i></button>
+          <output id="zoom-value" aria-label="当前缩放">100%</output>
+          <button id="zoom-in" type="button" aria-label="放大" data-tooltip="放大"><i data-ph="plus"></i></button>
+          <span class="control-divider" aria-hidden="true"></span>
+          <button id="reset-camera" type="button" aria-label="查看全景" data-tooltip="全景 · F"><i data-ph="corners-out"></i></button>
+          <button id="toggle-minimap" type="button" aria-label="小地图" aria-controls="minimap-panel" aria-expanded="false" data-tooltip="小地图"><i data-ph="crosshair"></i></button>
+        </div>
+        <div id="minimap-panel" class="world-overview is-hidden" role="group" aria-label="小地图"><canvas id="minimap" width="360" height="216" tabindex="0" aria-label="桌面小地图，点击定位，方向键移动镜头"></canvas><button id="go-home" type="button" aria-label="回到主桌" title="回到主桌"><i data-ph="cards-three"></i></button></div>
+        <button id="open-hand" class="hand-toggle" type="button" aria-expanded="false"><i data-ph="cards-three"></i><span>我的手牌</span><b id="hand-count">0</b></button>
+        <section id="hand-drawer" class="hand-drawer is-hidden" aria-label="我的私有手牌"><header><strong title="仅自己可见">手牌 <i data-ph="eye-slash"></i></strong><button id="close-hand" type="button" aria-label="收起手牌"><i data-ph="x"></i></button></header><div id="hand-cards" class="hand-cards"></div></section>
+
+        <div id="reconnect-banner" class="reconnect-banner is-hidden" role="status">
+          <span></span><strong id="reconnect-label">网络有波动，正在恢复同步…</strong>
+        </div>
+      </main>
+
+      <aside id="tools-panel" class="side-panel side-panel--right" aria-label="桌面工具" aria-hidden="true">
+        <header class="mobile-panel-header">
+          <div><i data-ph="sliders-horizontal"></i><strong>工具</strong></div>
+          <button id="close-tools" type="button" aria-label="关闭桌面工具"><i data-ph="x"></i></button>
+        </header>
+
+        <section class="panel-section control-section">
+          <div class="section-heading"><h2>牌桌</h2></div>
+          <div class="tool-grid tool-grid--compact">
+            <button id="draw-card" class="tool-button" type="button"><i data-ph="cards-three"></i><strong>抽牌</strong></button>
+            <button id="shuffle-deck" class="tool-button" type="button"><i data-ph="shuffle"></i><strong>洗中央牌堆</strong></button>
+            <button id="undo-table" class="tool-button host-tool" type="button"><i data-ph="arrow-counter-clockwise"></i><strong>撤销</strong></button>
+            <button id="open-history" class="tool-button" type="button" aria-controls="history-panel" aria-expanded="false"><i data-ph="clock-counter-clockwise"></i><strong>历史</strong></button>
+          </div>
+        </section>
+
+        <details class="tool-disclosure host-tool">
+          <summary><strong>开局与整理</strong><span>房主</span></summary>
+          <div class="tool-disclosure__body">
+            <div class="deal-station">
+              <strong>发牌</strong>
+              <label for="deal-count">每人</label>
+              <select id="deal-count" aria-label="每人发牌张数"></select>
+              <button id="deal-cards" type="button">发牌</button>
+            </div>
+            <div class="tool-grid tool-grid--compact">
+              <button id="tidy-public" class="tool-button" type="button"><i data-ph="stack"></i><strong>整理散牌</strong></button>
+              <button id="collect-public" class="tool-button" type="button"><i data-ph="arrow-line-down"></i><strong>公共牌洗回</strong></button>
+              <button id="reset-table" class="tool-button tool-button--danger" type="button"><i data-ph="arrows-counter-clockwise"></i><strong>重置桌面</strong></button>
+            </div>
+          </div>
+        </details>
+
+        <details class="tool-disclosure">
+          <summary><strong>游戏组件</strong></summary>
+          <div class="tool-disclosure__body">
+            <div class="dice-station">
+              <div id="die-face" class="die-face" data-sides="D6" aria-live="polite"><span>?</span></div>
+              <div class="dice-station__copy"><strong id="die-label">公共 D6</strong></div>
+              <button id="roll-die" class="dice-roll-button" type="button">掷骰 <kbd>R</kbd></button>
+            </div>
+            <div class="counter-station">
+              <strong id="counter-label">回合</strong>
+              <div class="counter-stepper" role="group" aria-label="调整共享计数器">
+                <button id="decrement-counter" type="button" aria-label="计数减一"><i data-ph="minus"></i></button>
+                <output id="counter-value" aria-live="polite">1</output>
+                <button id="increment-counter" type="button" aria-label="计数加一"><i data-ph="plus"></i></button>
+              </div>
+            </div>
+            <div class="turn-station">
+              <div class="turn-station__heading">
+                <span id="turn-avatar" class="turn-avatar" aria-hidden="true">?</span>
+                <strong id="turn-player-name" aria-live="polite">未指定行动玩家</strong>
+              </div>
+              <select id="turn-player-select" aria-label="选择当前行动玩家"></select>
+              <div class="turn-station__actions">
+                <button id="random-turn" type="button">随机</button>
+                <button id="next-turn" type="button">下一位</button>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="tool-disclosure">
+          <summary><strong>玩家与席位</strong><span id="player-count">0/8</span></summary>
+          <div class="tool-disclosure__body">
+            <div id="player-list" class="player-list"></div>
+            <div class="seat-section">
+              <span id="offline-seat-count" class="count-badge">0 离线</span>
+              <button id="leave-seat" class="seat-action seat-action--leave" type="button">离开席位</button>
+              <button id="cleanup-offline" class="seat-action seat-action--cleanup is-hidden" type="button">清理离线席位</button>
+              <button id="open-guest-test" class="seat-action seat-action--test is-hidden" type="button"><i data-ph="share-network"></i>打开客人测试页</button>
+            </div>
+          </div>
+        </details>
+
+      </aside>
+
+      <aside id="library-panel" class="library-panel" aria-label="资源库" aria-hidden="true">
+        <header class="mobile-panel-header">
+          <div><i data-ph="package"></i><strong>资源库</strong><span id="library-total" class="count-badge"></span></div>
+          <button id="close-library" type="button" aria-label="关闭资源库"><i data-ph="x"></i></button>
+        </header>
+        <div class="library-panel__body">
+          <input id="library-search" type="search" placeholder="搜索资源" aria-label="搜索资源" autocomplete="off" />
+          <nav id="library-tabs" class="library-tabs" aria-label="资源分类"><button type="button" data-category="all" class="is-active" aria-pressed="true">全部</button><button type="button" data-category="packs" aria-pressed="false">牌盒</button><button type="button" data-category="objects" aria-pressed="false">小物</button><button type="button" data-category="boards" aria-pressed="false">棋盘</button><button type="button" data-category="favorites" aria-pressed="false">收藏</button></nav>
+          <div id="pack-library" class="pack-library"></div>
+        </div>
+        <footer class="library-footer"><button id="import-pack" type="button"><i data-ph="arrow-up"></i>导入牌盒</button></footer>
+      </aside>
+
+      <aside id="world-panel" class="aux-panel" aria-label="桌面导航" aria-hidden="true"><header><div><i data-ph="crosshair"></i><strong>桌面</strong></div><button type="button" data-close-aux aria-label="关闭桌面导航"><i data-ph="x"></i></button></header><div class="aux-panel__body"><div id="world-locations"></div><button id="add-playmat" class="outline-button" type="button"><i data-ph="plus"></i>添加桌垫</button></div></aside>
+      <aside id="chat-panel" class="aux-panel chat-panel" aria-label="聊两句" aria-hidden="true"><header><div><i data-ph="users-three"></i><strong>聊两句</strong></div><button type="button" data-close-aux aria-label="关闭聊天"><i data-ph="x"></i></button></header><div id="chat-messages" class="chat-messages" role="log" aria-live="polite"></div><form id="chat-form" class="chat-form"><input id="chat-input" aria-label="发送给同桌朋友" placeholder="说点什么…" maxlength="280" autocomplete="off" /><button type="submit" aria-label="发送"><i data-ph="arrow-up"></i></button></form></aside>
+      <aside id="saves-panel" class="aux-panel saves-panel" aria-label="桌面存档" aria-hidden="true"><header><div><i data-ph="arrow-line-down"></i><strong>存档</strong></div><button type="button" data-close-aux aria-label="关闭存档"><i data-ph="x"></i></button></header><div class="aux-panel__body"><form id="save-form"><label for="save-name">名称</label><input id="save-name" maxlength="20" placeholder="我的桌面" required /><button id="save-scene" class="primary-button" type="submit">保存</button></form><p id="save-status" class="save-status" role="status"></p><div class="saved-heading"><strong>本机存档</strong></div><div id="saved-scenes"></div><div class="save-file-actions"><button id="export-scene" type="button"><i data-ph="arrow-line-down"></i>导出文件</button><button id="import-scene" type="button"><i data-ph="arrow-up"></i>导入存档</button></div></div></aside>
+
+      <aside id="history-panel" class="history-panel" aria-label="操作历史" aria-hidden="true">
+        <header class="history-panel__header">
+          <div><i data-ph="clock-counter-clockwise"></i><strong>操作历史</strong></div>
+          <button id="close-history" type="button" aria-label="关闭操作历史"><i data-ph="x"></i></button>
+        </header>
+        <div id="activity-list" class="activity-list"><p class="empty-activity">还没有动作。</p></div>
+      </aside>
+
+      <button id="tools-backdrop" class="tools-backdrop is-hidden" type="button" aria-label="关闭侧边面板"></button>
+    </div>
+
+    <div id="help-panel" class="help-sheet is-hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <button id="help-backdrop" class="help-sheet__backdrop" type="button" aria-label="关闭操作帮助"></button>
+      <section class="help-sheet__panel">
+        <header class="help-sheet__header">
+          <h2 id="help-title">操作帮助</h2>
+          <button id="close-help" class="help-sheet__close" type="button" aria-label="关闭"><i data-ph="x"></i></button>
+        </header>
+        <div class="help-grid help-grid--compact">
+          <article><span>01</span><strong>拖动与旋转</strong><p>拖动资源改变位置。拖牌时按 <kbd>Q</kbd>/<kbd>E</kbd>，或按住 <kbd>⌥</kbd> 左右移动即可旋转；轻点后也有旋转按钮。</p></article>
+          <article><span>02</span><strong>整组拿起来</strong><p>重叠的牌会叠成一组，拖动时整组一起走。轻点后可抽一张、洗牌或展开。牌盒双击抽牌，拖动移动整副。</p></article>
+          <article><span>03</span><strong>到处玩一玩</strong><p>按 <kbd>B</kbd> 拿资源，<kbd>I</kbd> 看手牌。拖空白移动，滚动缩放，<kbd>F</kbd> 看全景。小物件可以装进收纳袋。</p></article>
+          <article><span>04</span><strong>下次接着玩</strong><p>存档保留整张桌面的布置，手牌在存档中归回牌盒。存档存在当前浏览器，也可以导出文件。</p></article>
+        </div>
+        <footer class="help-sheet__footer">
+          <p>手牌只有自己能看到</p>
+          <button id="start-playing" class="primary-button" type="button">开始</button>
+        </footer>
+      </section>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <input id="pack-file" type="file" accept=".json,application/json" hidden />
+    <input id="scene-file" type="file" accept=".json,application/json" hidden />
+    <dialog id="resource-editor" class="workspace-dialog"><form id="resource-edit-form"><header><h2>编辑物件</h2><button type="button" data-close-dialog aria-label="关闭编辑"><i data-ph="x"></i></button></header><label for="resource-label">名字</label><input id="resource-label" maxlength="20" required /><label id="resource-text-label" for="resource-text">写点什么</label><textarea id="resource-text" maxlength="600" rows="5"></textarea><button class="primary-button" type="submit">放回桌上</button></form></dialog>
+    <dialog id="host-guide" class="workspace-dialog"><header><h2>喊朋友来坐坐</h2><button type="button" data-close-dialog aria-label="关闭开房说明"><i data-ph="x"></i></button></header><p>现在是单机试玩。想让朋友看到同一张桌面，需要先开一个联机房间。</p><ol><li>双击项目中的 <strong>开房.command</strong>。</li><li>填写名字、选择牌盒，等待邀请链接。</li><li>把访客链接发给朋友，终端保持开启。</li></ol><p class="dialog-note">朋友直接打开链接就能入座，不用安装，也不用注册。</p><button class="primary-button" type="button" data-close-dialog>知道了</button></dialog>
+    <dialog id="card-inspector" class="workspace-dialog card-inspector"><button type="button" data-close-dialog aria-label="关闭卡牌预览"><i data-ph="x"></i></button><div id="inspected-card"></div></dialog>
+  </body>
+</html>
