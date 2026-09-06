@@ -57,7 +57,7 @@ export async function loadClient({ width = 1440, height = 900, indexedDB, storag
     constructor(tag = "div") {
       this.tagName = tag.toUpperCase(); this.attributes = new Map(); this.childNodes = []; this.parentElement = null;
       this.style = style(); this.events = new Map(); this.disabled = false; this._value = undefined; this._text = "";
-      this.scrollTop = 0; this.scrollHeight = 200; this.clientHeight = 200; this.files = []; this.rect = null;
+      this.scrollTop = 0; this.scrollLeft = 0; this.scrollHeight = 200; this.clientHeight = 200; this.files = []; this.rect = null;
       this.dataset = new Proxy({}, {
         get: (_, key) => this.getAttribute(`data-${toData(key)}`) ?? undefined,
         set: (_, key, value) => { this.setAttribute(`data-${toData(key)}`, value); return true; },
@@ -91,6 +91,14 @@ export async function loadClient({ width = 1440, height = 900, indexedDB, storag
       }
     }
     prepend(...nodes) { const previous = [...this.childNodes]; this.replaceChildren(...nodes, ...previous); }
+    insertBefore(node, before) {
+      if (!before) { this.append(node); return node; }
+      if (node === before) return node;
+      if (before.parentElement !== this) throw new Error("Reference node is not a child");
+      node.remove(); node.parentElement = this;
+      this.childNodes.splice(this.childNodes.indexOf(before), 0, node);
+      return node;
+    }
     replaceChildren(...nodes) { for (const child of this.childNodes) child.parentElement = null; this.childNodes = []; this._text = ""; if (this.tagName === "SELECT") this._value = undefined; this.append(...nodes); }
     replaceWith(...nodes) {
       if (!this.parentElement) return;

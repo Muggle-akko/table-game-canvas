@@ -135,6 +135,10 @@ const app = {
   camera: { x: 0, y: 0, scale: 0.68 },
   pan: null,
   drag: null,
+  tableTouches: new Map(),
+  touchNavigation: null,
+  handTouch: null,
+  ignoreTableClickUntil: 0,
   handLayouts: new Map(),
   cardPositions: new Map(),
   cardFaceStates: new Map(),
@@ -156,6 +160,7 @@ const app = {
   helpReturnFocus: null,
   focusMode: false,
   selection: null,
+  selectionIntent: 0,
   selectionTransferOpen: false,
   previewModel: null
 };
@@ -229,6 +234,7 @@ function clearStoredSession() {
 }
 
 function showHelp() {
+  app.selectionIntent++;
   const activeElement = document.activeElement;
   let returnTarget = activeElement;
   if (activeElement instanceof HTMLElement && elements.toolsPanel.contains(activeElement)) returnTarget = elements.openTools;
@@ -255,6 +261,7 @@ function hideHelp({ returnFocus = true } = {}) {
 }
 
 function showTools() {
+  app.selectionIntent++;
   workspace?.closePanel({ returnFocus: false });
   hideLibrary({ returnFocus: false });
   hideHistory({ returnFocus: false });
@@ -277,6 +284,7 @@ function hideTools({ returnFocus = true } = {}) {
 }
 
 function showLibrary() {
+  app.selectionIntent++;
   workspace?.closePanel({ returnFocus: false });
   hideTools({ returnFocus: false });
   hideHistory({ returnFocus: false });
@@ -303,6 +311,7 @@ function hideLibrary({ returnFocus = true } = {}) {
 }
 
 function showHistory() {
+  app.selectionIntent++;
   workspace?.closePanel({ returnFocus: false });
   hideTools({ returnFocus: false });
   hideLibrary({ returnFocus: false });
@@ -941,7 +950,8 @@ function syncSelectionClasses() {
   }
 }
 
-function clearSelection() {
+function clearSelection({ preserveIntent = false } = {}) {
+  if (!preserveIntent) app.selectionIntent++;
   app.selection = null;
   app.selectionTransferOpen = false;
   delete elements.selectionDock.dataset.resourceKey;
@@ -952,7 +962,8 @@ function clearSelection() {
   if (app.state) { renderDealOptions(); renderTools(); }
 }
 
-function selectResource(type, id = "") {
+function selectResource(type, id = "", { preserveIntent = false } = {}) {
+  if (!preserveIntent) app.selectionIntent++;
   workspace?.hideMinimap();
   app.selection = { type, id: type === "deck" ? id || "main" : id };
   app.selectionTransferOpen = false;
@@ -1030,7 +1041,7 @@ function renderSelectionDock() {
   }
   const resource = selectedResource();
   if (!resource) {
-    clearSelection();
+    clearSelection({ preserveIntent: true });
     return;
   }
 
@@ -1914,6 +1925,110 @@ function setZoom(nextScale, anchorX, anchorY) {
   applyCamera();
 }
 
+function cancelPan({ releaseCapture = true } = {}) {
+  const pan = app.pan;
+  app.pan = null;
+  elements.viewport.classList.remove("is-panning");
+  if (pan && releaseCapture) {
+    try { elements.viewport.releasePointerCapture?.(pan.pointerId); } catch { /* Pointer already released. */ }
+  }
+}
+
+function rebaseTouchNavigation() {
+  const entries = [...app.tableTouches].slice(0, 2);
+  if (!entries.length) {
+    app.touchNavigation = null;
+    app.ignoreTableClickUntil = Date.now() + 400;
+    return;
+  }
+  const first = entries[0][1], second = entries[1]?.[1] || first;
+  const center = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+  app.touchNavigation = {
+    ids: entries.map(([id]) => id),
+    distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
+    scale: app.camera.scale,
+    anchor: screenToWorld(center.x, center.y)
+  };
+}
+
+function beginTouchNavigation() {
+  cancelDrag({ releaseCapture: false });
+  cancelPan({ releaseCapture: false });
+  app.handTouch = null;
+  clearSelection();
+  rebaseTouchNavigation();
+  app.cameraTouched = true;
+  for (const pointerId of app.tableTouches.keys()) elements.viewport.setPointerCapture?.(pointerId);
+  clearCursorQueue();
+  if (app.localCursor) { app.localCursor.visible = false; renderCursors(); }
+}
+
+function moveTouchNavigation() {
+  const gesture = app.touchNavigation;
+  if (!gesture) return;
+  const first = app.tableTouches.get(gesture.ids[0]);
+  const second = app.tableTouches.get(gesture.ids[1]) || first;
+  if (!first) return;
+  const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+  const scale = Math.max(0.015, Math.min(1.8, gesture.scale * distance / gesture.distance));
+  const center = viewportPoint((first.x + second.x) / 2, (first.y + second.y) / 2);
+  app.camera = { scale, x: center.x - gesture.anchor.x * scale, y: center.y - gesture.anchor.y * scale };
+  applyCamera();
+}
+
+function endTableTouch(pointerId) {
+  const navigating = Boolean(app.touchNavigation);
+  if (!app.tableTouches.delete(pointerId)) return false;
+  if (navigating) rebaseTouchNavigation();
+  return navigating;
+}
+
+function cancelTableTouches() {
+  const pointerIds = [...app.tableTouches.keys()];
+  app.tableTouches.clear();
+  app.touchNavigation = null;
+  if (pointerIds.length) app.ignoreTableClickUntil = Date.now() + 400;
+  for (const pointerId of pointerIds) {
+    try { elements.viewport.releasePointerCapture?.(pointerId); } catch { /* Pointer already released. */ }
+  }
+  return pointerIds.length > 0;
+}
+
+function ignoreTableActivation(event) {
+  return event.detail !== 0 && Boolean(app.touchNavigation || Date.now() < app.ignoreTableClickUntil);
+}
+
+function cancelHandInteraction() {
+  const active = Boolean(app.handTouch || app.drag?.fromPocket);
+  app.handTouch = null;
+  if (app.drag?.fromPocket) cancelDrag();
+  if (active) app.ignoreTableClickUntil = Date.now() + 400;
+  return active;
+}
+
+function moveHandTouch(event) {
+  const touch = app.handTouch;
+  if (!touch || touch.pointerId !== event.pointerId) return false;
+  const dx = event.clientX - touch.clientX, dy = event.clientY - touch.clientY;
+  if (touch.scrolling || Math.hypot(dx, dy) < 10) return true;
+  if (Math.abs(dx) >= Math.abs(dy)) { touch.scrolling = true; return true; }
+  app.handTouch = null;
+  const card = app.state?.cards.find((item) => item.id === touch.cardId && item.zone === "hand" && item.ownerId === app.state.you.id);
+  const node = elements.handCards.querySelector(`[data-card-id="${touch.cardId}"]`);
+  if (card && node && !elements.handDrawer.classList.contains("is-hidden")) {
+    startDrag({ pointerId: event.pointerId, pointerType: "touch", target: node, clientX: touch.clientX, clientY: touch.clientY, preventDefault: () => event.preventDefault() }, "card", card);
+  }
+  return !app.drag;
+}
+
+function endHandTouch(event) {
+  const touch = app.handTouch;
+  if (!touch || touch.pointerId !== event.pointerId) return false;
+  app.handTouch = null;
+  if (!touch.scrolling && Math.hypot(event.clientX - touch.clientX, event.clientY - touch.clientY) < 10) selectResource("card", touch.cardId);
+  return true;
+}
+
 function makeCursorNode(cursor, isLocal) {
   const node = document.createElement("div");
   node.className = `table-cursor${isLocal ? " is-local" : ""}`;
@@ -2191,6 +2306,7 @@ function setDragSourceClasses(drag, active) {
 
 function startDrag(event, sourceType, resource = null) {
   if (!app.state || !resource) return;
+  if (app.drag || app.pan || app.touchNavigation || (event.pointerType === "touch" && (event.isPrimary === false || app.tableTouches.size))) return;
   if (!app.connectionOpen || resource.locked || (["card", "token"].includes(sourceType) && !resource.canControl)) {
     selectResource(sourceType, resource.id);
     return;
@@ -2240,6 +2356,8 @@ function startDrag(event, sourceType, resource = null) {
   const sourceNode = pocketNode || sourceNodeFor(sourceType, resource?.id);
   app.drag = {
     pointerId: event.pointerId,
+    pointerType: event.pointerType,
+    fromPocket: Boolean(pocketNode),
     sourceType,
     resource,
     stackCards,
@@ -2308,15 +2426,17 @@ function moveDrag(event) {
   updateDropTargets(point);
 }
 
-function cancelDrag() {
+function cancelDrag({ releaseCapture = true } = {}) {
   const drag = app.drag;
   if (!drag) return;
+  app.drag = null;
   if (drag.activated) endRemoteDragPreview();
   setDragSourceClasses(drag, false);
-  try { drag.sourceNode?.releasePointerCapture?.(drag.pointerId); } catch { /* Pointer already released. */ }
+  if (releaseCapture) {
+    try { drag.sourceNode?.releasePointerCapture?.(drag.pointerId); } catch { /* Pointer already released. */ }
+  }
   elements.dragRoot.replaceChildren();
   clearDropTargets();
-  app.drag = null;
 }
 
 function finishDrag(event) {
@@ -2357,10 +2477,12 @@ function finishDrag(event) {
   if (command) void sendCommand(command);
 }
 
-function applyPreviewCommand(command) {
+async function applyPreviewCommand(command) {
   if (!window.ParlorPreview) throw new Error("离线试玩核心没有加载成功，请刷新页面。");
-  window.ParlorPreview.applyCommand(app.previewModel, app.state.you.id, command);
-  syncPreviewState(app.state.you.id);
+  const viewerId = app.state.you.id;
+  const receipt = await window.ParlorPreview.applyCommand(app.previewModel, viewerId, command, { withReceipt: true });
+  if (app.state.you.id === viewerId) syncPreviewState(viewerId);
+  return receipt;
 }
 async function postRealtimeMessage(message, quiet = false) {
   if (previewMode) return { ok: true };
@@ -2382,7 +2504,7 @@ async function postRealtimeMessage(message, quiet = false) {
   });
 }
 
-async function sendCommand(command) {
+async function sendCommand(command, { withReceipt = false } = {}) {
   if (!app.connectionOpen) {
     toast("正在连接牌桌，请稍后再试。");
     return false;
@@ -2391,12 +2513,11 @@ async function sendCommand(command) {
   app.pendingCommands.add(command.type);
   if (app.state) renderTools();
   try {
-    if (previewMode) applyPreviewCommand(command);
-    else {
-      const result = await postRealtimeMessage({ type: "command", command });
-      if (result?.state && (!app.state || result.state.revision > app.state.revision)) {
-        app.state = result.state; app.player = result.state.you; renderRoom();
-      }
+    const viewerId = app.state?.you.id;
+    const result = previewMode ? await applyPreviewCommand(command) : await postRealtimeMessage({ type: "command", command });
+    if (!result?.ok) throw new Error("未能确认操作结果，请检查桌面后再试。");
+    if (!previewMode && result.state?.you.id === viewerId && app.state?.you.id === viewerId && result.state.revision > app.state.revision) {
+      app.state = result.state; app.player = result.state.you; renderRoom();
     }
     if (command.type === "undo") toast("已恢复到上一步牌桌状态。 ");
     else if (command.type === "shuffle") toast("这副牌已经洗好。");
@@ -2407,7 +2528,7 @@ async function sendCommand(command) {
     else if (command.type === "collect-public") toast("公共牌已回到各自的牌盒。");
     else if (command.type === "deal-each") toast(`已给每位玩家发了 ${command.count} 张牌。`);
     else if (command.type === "cleanup-offline") toast("离线席位已经释放。 ");
-    return true;
+    return withReceipt ? result : true;
   } catch (error) {
     toast(error.message || "操作没有成功。", "error");
     if (command.type === "set-turn" && app.state) renderTurn();
@@ -2623,15 +2744,22 @@ function bindCardSurface(surface) {
     if (event.button !== 0 || event.target.closest("[data-card-action]")) return;
     const node = event.target.closest(".playing-card[data-card-id]");
     const card = app.state?.cards.find((item) => item.id === node?.dataset.cardId);
+    if (card && surface === elements.handCards && event.pointerType === "touch") {
+      if (event.isPrimary === false || app.handTouch || app.drag || app.touchNavigation || app.tableTouches.size) { cancelHandInteraction(); return; }
+      app.handTouch = { pointerId: event.pointerId, cardId: card.id, clientX: event.clientX, clientY: event.clientY, scrolling: false };
+      return;
+    }
     if (card) startDrag(event, "card", card);
   });
   surface.addEventListener("click", (event) => {
+    if (ignoreTableActivation(event)) return;
     const button = event.target.closest("[data-card-action='flip']");
     if (!button) return;
     const card = app.state?.cards.find((item) => item.id === button.closest("[data-card-id]")?.dataset.cardId);
     if (card?.canControl && card.zone === "public") void requestCardFlip(card.id);
   });
   surface.addEventListener("dblclick", (event) => {
+    if (ignoreTableActivation(event)) return;
     if (event.target.closest("[data-card-action]")) return;
     const node = event.target.closest(".playing-card[data-card-id]");
     const card = app.state?.cards.find((item) => item.id === node?.dataset.cardId);
@@ -2657,12 +2785,14 @@ elements.objectsRoot.addEventListener("pointerdown", (event) => {
   if (object) startDrag(event, "object", object);
 });
 elements.objectsRoot.addEventListener("click", (event) => {
+  if (ignoreTableActivation(event)) return;
   const button = event.target.closest("[data-object-action]");
   const node = button?.closest("[data-object-id]");
   if (!node) return;
   void sendCommand({ type: "adjust-resource", resourceType: "object", resourceId: node.dataset.objectId, delta: button.dataset.objectAction === "minus" ? -1 : 1 });
 });
 elements.objectsRoot.addEventListener("dblclick", (event) => {
+  if (ignoreTableActivation(event)) return;
   if (event.target.closest("button")) return;
   const node = event.target.closest(".world-object[data-object-id]");
   const object = app.state?.objects?.find((item) => item.id === node?.dataset.objectId);
@@ -2678,10 +2808,12 @@ elements.deckRoot.addEventListener("pointerdown", (event) => {
   if (deck) startDrag(event, "deck", deck);
 });
 elements.deckRoot.addEventListener("click", (event) => {
+  if (ignoreTableActivation(event)) return;
   const node = event.target.closest("[data-deck-id]");
   if (node && event.target.closest("[data-deck-action]")) selectResource("deck", node.dataset.deckId);
 });
 elements.deckRoot.addEventListener("dblclick", (event) => {
+  if (ignoreTableActivation(event)) return;
   if (event.target.closest("[data-deck-action]")) return;
   const node = event.target.closest(".deck-stack");
   if (node) void sendCommand({ type: "draw", deckId: node.dataset.deckId });
@@ -2701,18 +2833,29 @@ for (const surface of [elements.cardsRoot, elements.handCards, elements.tokenRoo
     if (selectFromTarget(event.target)) { event.preventDefault(); event.stopPropagation(); }
   });
   surface.addEventListener("contextmenu", (event) => {
+    if (ignoreTableActivation(event)) { event.preventDefault(); return; }
     if (selectFromTarget(event.target)) event.preventDefault();
   });
 }
 
 elements.viewport.addEventListener("dblclick", (event) => {
+  if (ignoreTableActivation(event)) return;
   if (app.drag || app.pan || event.target.closest(".playing-card, .deck-stack, .table-token, .world-object")) return;
   event.preventDefault();
   void pingAt(screenToWorld(event.clientX, event.clientY));
 });
 
 elements.viewport.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0 || app.drag || event.target.closest(".playing-card, .deck-stack, .table-token, .world-object")) return;
+  if (event.button !== 0 || !app.state) return;
+  if (event.pointerType === "touch") {
+    app.tableTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (app.tableTouches.size > 1 || app.touchNavigation) {
+      event.preventDefault();
+      beginTouchNavigation();
+      return;
+    }
+  }
+  if (app.drag || app.pan || event.target.closest(".playing-card, .deck-stack, .table-token, .world-object")) return;
   clearSelection();
   app.pan = {
     pointerId: event.pointerId,
@@ -2727,6 +2870,9 @@ elements.viewport.addEventListener("pointerdown", (event) => {
 });
 
 window.addEventListener("pointermove", (event) => {
+  if (app.tableTouches.has(event.pointerId)) app.tableTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (app.touchNavigation) { event.preventDefault(); moveTouchNavigation(); return; }
+  if (moveHandTouch(event)) return;
   if (app.drag) moveDrag(event);
   if (app.pan && event.pointerId === app.pan.pointerId) {
     app.camera.x = app.pan.cameraX + event.clientX - app.pan.clientX;
@@ -2760,21 +2906,34 @@ window.addEventListener("pointermove", (event) => {
 });
 
 window.addEventListener("pointerup", (event) => {
+  if (endTableTouch(event.pointerId) || endHandTouch(event)) return;
   if (app.drag) finishDrag(event);
   if (app.pan && event.pointerId === app.pan.pointerId) {
-    app.pan = null;
-    elements.viewport.classList.remove("is-panning");
+    cancelPan();
   }
 });
 
 window.addEventListener("pointercancel", (event) => {
+  if (endTableTouch(event.pointerId)) return;
+  if (app.handTouch?.pointerId === event.pointerId) app.handTouch = null;
   if (app.drag && event.pointerId === app.drag.pointerId) {
     cancelDrag();
   }
   if (app.pan && event.pointerId === app.pan.pointerId) {
-    app.pan = null;
-    elements.viewport.classList.remove("is-panning");
+    cancelPan();
   }
+});
+
+window.addEventListener("lostpointercapture", (event) => {
+  if (event.target === elements.viewport && app.tableTouches.has(event.pointerId)) {
+    cancelTableTouches();
+    cancelPan();
+  }
+  if (app.drag?.pointerId === event.pointerId && event.target === app.drag.sourceNode) {
+    app.tableTouches.delete(event.pointerId);
+    cancelDrag();
+  }
+  if (app.pan?.pointerId === event.pointerId) cancelPan();
 });
 
 elements.viewport.addEventListener("pointerleave", () => {
@@ -2816,7 +2975,9 @@ document.addEventListener("pointerdown", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     const libraryCancelled = workspace?.cancelLibraryDrag();
-    if (app.drag || libraryCancelled) { event.preventDefault(); cancelDrag(); return; }
+    const handCancelled = cancelHandInteraction();
+    const touchCancelled = cancelTableTouches();
+    if (app.drag || app.pan || libraryCancelled || handCancelled || touchCancelled) { event.preventDefault(); cancelDrag(); cancelPan(); return; }
   }
   if (document.querySelector("dialog[open]")) return;
   const openMenu = elements.selectionActions.querySelector("details[open]");
@@ -2929,9 +3090,10 @@ window.addEventListener("beforeunload", () => {
 });
 
 window.addEventListener("blur", () => {
+  cancelHandInteraction();
+  cancelTableTouches();
   cancelDrag();
-  app.pan = null;
-  elements.viewport.classList.remove("is-panning");
+  cancelPan();
   if (app.localCursor) { app.localCursor.visible = false; renderCursors(); }
 });
 
@@ -2964,7 +3126,7 @@ workspace = window.ParlorWorkspace.create({
   app, elements, previewMode, toast, sendCommand, screenToWorld,
   fitCamera, fitAll, focusWorldPoint, applyCamera, makeCardNode,
   makeSelectionAction, selectedResource, selectResource, clearSelection,
-  showLibrary, toggleLibrary, hideSidePanels,
+  showLibrary, toggleLibrary, hideSidePanels, cancelHandInteraction,
   fetchScene: async (name) => {
     const url = new URL(apiUrl("/api/save"));
     url.searchParams.set("room", roomCode); url.searchParams.set("session", app.sessionToken); url.searchParams.set("name", name);

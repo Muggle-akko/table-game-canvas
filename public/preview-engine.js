@@ -71,17 +71,19 @@
     return { ...core.projectRoom(model.engineRoom, viewerId), serverTime: now };
   }
 
-  function applyCommand(model, viewerId, command, { now = Date.now() } = {}) {
+  function applyCommand(model, viewerId, command, { now = Date.now(), withReceipt = false } = {}) {
     const room = model.engineRoom;
+    let createdResource;
     if (command.type === "replace-pack") core.replaceRoomPack(room, viewerId, getPack(command.packId));
-    else if (command.type === "add-pack") core.addRoomPack(room, viewerId, getPack(command.packId), command);
+    else if (command.type === "add-pack") createdResource = { type: "deck", id: core.addRoomPack(room, viewerId, getPack(command.packId), command) };
     else if (command.type === "import-pack") {
       if (room.players.get(viewerId).role !== "host") throw new core.RoomError("HOST_ONLY", "只有房主可以导入牌盒。", 403);
       core.validatePortablePack(command.pack);
-      core.addRoomPack(room, viewerId, command.pack, command);
+      createdResource = { type: "deck", id: core.addRoomPack(room, viewerId, command.pack, command) };
     } else if (command.type === "restore-scene") core.restoreRoomScene(room, viewerId, command.scene);
-    else core.applyCommand(room, viewerId, command);
-    return project(model, viewerId, now);
+    else createdResource = core.applyCommand(room, viewerId, command)?.createdResource;
+    const state = project(model, viewerId, now);
+    return withReceipt ? { ok: true, revision: state.revision, state, ...(createdResource ? { createdResource } : {}) } : state;
   }
 
   root.ParlorPreview = Object.freeze({ createModel, project, applyCommand, PreviewError: core.RoomError });

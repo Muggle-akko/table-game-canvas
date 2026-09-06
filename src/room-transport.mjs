@@ -388,22 +388,23 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
 
         if (message.type === "command") {
           const playerIdsBeforeCommand = new Set(room.players.keys());
+          let createdResource;
           if (["replace-pack", "add-pack"].includes(message.command?.type)) {
             if (typeof loadPack !== "function") {
               throw new RoomError("PACK_NOT_AVAILABLE", "这个房间没有可更换的牌盒。", 404);
             }
             const packId = String(message.command.packId || "").slice(0, 40);
             const pack = await loadPack(packId);
-            if (message.command.type === "add-pack") addRoomPack(room, player.id, pack, message.command);
+            if (message.command.type === "add-pack") createdResource = { type: "deck", id: addRoomPack(room, player.id, pack, message.command) };
             else replaceRoomPack(room, player.id, pack);
           } else if (message.command?.type === "import-pack") {
             if (player.role !== "host") throw new RoomError("HOST_ONLY", "只有房主可以导入牌盒。", 403);
             const pack = validatePortablePack(message.command.pack);
-            addRoomPack(room, player.id, pack, message.command);
+            createdResource = { type: "deck", id: addRoomPack(room, player.id, pack, message.command) };
           } else if (message.command?.type === "restore-scene") {
             restoreRoomScene(room, player.id, message.command.scene);
           } else {
-            applyCommand(room, player.id, message.command);
+            createdResource = applyCommand(room, player.id, message.command)?.createdResource;
           }
           for (const playerId of playerIdsBeforeCommand) {
             if (!room.players.has(playerId)) broadcastCursorLeave(playerId);
@@ -414,7 +415,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
             return true;
           }
           broadcastState();
-          sendJson(request, response, 200, { ok: true, revision: room.revision, state: projectRoom(room, player.id) });
+          sendJson(request, response, 200, { ok: true, revision: room.revision, state: projectRoom(room, player.id), ...(createdResource ? { createdResource } : {}) });
           return true;
         }
 

@@ -207,7 +207,7 @@
     }
 
     function drawMap() {
-      const state = ui.app.state; if (!state) return;
+      const state = ui.app.state; if (!state || $("minimap-panel").classList.contains("is-hidden")) return;
       const canvas = $("minimap"), ctx = canvas.getContext("2d"); if (!ctx) return;
       const items = [
         ...(state.decks || []).map((item) => ({ ...item, width: 94, height: 138, color: item.back.color })),
@@ -248,14 +248,33 @@
       const own = ui.app.state.cards.filter((card) => card.zone === "hand" && card.ownerId === ui.app.state.you.id);
       $("hand-count").textContent = String(own.length);
       const signature = JSON.stringify(own); if (signature === handSignature) return; handSignature = signature;
-      $("hand-cards").replaceChildren(...own.map((card) => ui.makeCardNode(card, { x: 0, y: 0, rotation: 0, z: 0 })));
-      if (!own.length) $("hand-cards").append(el("p", "empty-hand", "暂无手牌"));
+      const container = $("hand-cards"), scrollLeft = container.scrollLeft;
+      const existing = new Map([...container.children].map((node) => [node.dataset.cardId, node]));
+      const ids = new Set(own.map((card) => card.id));
+      const activeCardId = ui.app.handTouch?.cardId || (ui.app.drag?.fromPocket ? ui.app.drag.resource.id : null);
+      if (activeCardId && !ids.has(activeCardId)) ui.cancelHandInteraction();
+      for (const [index, card] of own.entries()) {
+        const old = existing.get(card.id);
+        const cardSignature = JSON.stringify([card.face, card.back, card.deckId, card.canControl, card.locked]);
+        const node = old?.dataset.pocketSignature === cardSignature ? old : ui.makeCardNode(card, { x: 0, y: 0, rotation: 0, z: 0 });
+        node.dataset.pocketSignature = cardSignature;
+        if (old && old !== node) {
+          const focused = old.contains(document.activeElement);
+          old.replaceWith(node);
+          if (focused) node.focus({ preventScroll: true });
+        }
+        if (container.children[index] !== node) container.insertBefore(node, container.children[index] || null);
+      }
+      for (const [id, node] of existing) if (!ids.has(id)) node.remove();
+      if (!own.length) container.append(el("p", "empty-hand", "暂无手牌"));
+      container.scrollLeft = scrollLeft;
     }
 
     function toggleHand() {
       const open = $("hand-drawer").classList.toggle("is-hidden") === false;
       $("open-hand").setAttribute("aria-expanded", String(open));
       if (open) $("hand-cards").querySelector("[tabindex]")?.focus({ preventScroll: true });
+      else { ui.cancelHandInteraction(); $("open-hand").focus({ preventScroll: true }); }
     }
 
     function renderChat() {

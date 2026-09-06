@@ -411,7 +411,7 @@ kbd { font: 11px/1.5 var(--body); border: 1px solid currentColor; border-radius:
 .hand-drawer header button { width: 30px; height: 28px; }
 .hand-drawer header svg { width: 16px; height: 16px; }
 .hand-cards { display: flex; align-items: center; gap: 12px; min-height: 173px; overflow-x: auto; padding: 16px 19px 20px; overscroll-behavior: contain; scrollbar-width: thin; }
-.hand-cards .playing-card { position: relative; flex: 0 0 94px; left: auto !important; top: auto !important; }
+.hand-cards .playing-card { position: relative; flex: 0 0 94px; left: auto !important; top: auto !important; touch-action: pan-x pinch-zoom; }
 .hand-drawer.is-drop-target { outline: 2px solid var(--accent); }
 .empty-hand { width: 100%; text-align: center; color: #c1d2b9; font-size: 12px; }
 .table-stage:has(.hand-drawer:not(.is-hidden)) .selection-dock { bottom: 301px; }
