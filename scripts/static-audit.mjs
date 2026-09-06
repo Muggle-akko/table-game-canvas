@@ -9,6 +9,8 @@ const publicDirectory = resolve(root, "public");
 const html = await readFile(resolve(publicDirectory, "index.html"), "utf8");
 const app = await readFile(resolve(publicDirectory, "app.js"), "utf8");
 const workspace = await readFile(resolve(publicDirectory, "workspace-ui.js"), "utf8");
+const feedback = await readFile(resolve(publicDirectory, "room-feedback.js"), "utf8");
+const holdemUi = await readFile(resolve(publicDirectory, "holdem-ui.js"), "utf8");
 const styles = await readFile(resolve(publicDirectory, "styles.css"), "utf8");
 const icons = await readFile(resolve(publicDirectory, "phosphor-icons.js"), "utf8");
 const previewEngine = await readFile(resolve(publicDirectory, "preview-engine.js"), "utf8");
@@ -22,14 +24,14 @@ assert.equal(new Set(htmlIds).size, htmlIds.length, "index.html contains duplica
 
 const queriedIds = [
   ...[...app.matchAll(/\$\("#([^"]+)"\)/g)].map((match) => match[1]),
-  ...[...workspace.matchAll(/\$\("([\w-]+)"\)/g)].map((match) => match[1])
+  ...[...`${workspace}\n${feedback}\n${holdemUi}`.matchAll(/\$\("([\w-]+)"\)/g)].map((match) => match[1])
 ];
 const missingIds = queriedIds.filter((id) => !htmlIds.includes(id));
 assert.deepEqual(missingIds, [], `app.js queries missing DOM IDs: ${missingIds.join(", ")}`);
 
 const localAssets = [...html.matchAll(/\b(?:src|href)="\.\/([^"]+)"/g)].map((match) => match[1]);
 for (const asset of localAssets) await access(resolve(publicDirectory, asset));
-const scriptOrder = ["phosphor-icons.js", "tabletop-engine.js", "builtin-packs.js", "preview-engine.js", "vault.js", "workspace-ui.js", "app.js"];
+const scriptOrder = ["phosphor-icons.js", "tabletop-engine.js", "builtin-packs.js", "preview-engine.js", "vault.js", "room-recovery.js", "preview-recovery.js", "holdem-ui.js", "workspace-ui.js", "room-feedback.js", "app.js"];
 for (let index = 1; index < scriptOrder.length; index++) {
   assert.ok(html.indexOf(`./${scriptOrder[index - 1]}`) < html.indexOf(`./${scriptOrder[index]}`), `${scriptOrder[index]} must load after its dependencies`);
 }

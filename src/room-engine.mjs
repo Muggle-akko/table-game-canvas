@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from "node:crypto";
+import { HoldemError, createHoldemPack, createHoldemState, planHoldem, remapHoldem, projectHoldem, validateHoldemState } from "./holdem-rules.mjs";
 
 export const TABLE_GEOMETRY = Object.freeze({
   width: 1800,
@@ -52,9 +53,9 @@ function cleanName(value, fallback) {
   return Array.from(compact || fallback).slice(0, 20).join("");
 }
 
-function uniqueName(room, requested, fallback) {
+function uniqueName(room, requested, fallback, exceptId = null) {
   const base = cleanName(requested, fallback);
-  const existing = new Set([...room.players.values()].map((player) => player.name));
+  const existing = new Set([...room.players.values()].filter((player) => player.id !== exceptId).map((player) => player.name));
   if (!existing.has(base)) return base;
 
   let suffix = 2;
@@ -83,15 +84,93 @@ function nextAvailableSeatIndex(room) {
   return room.nextSeatIndex;
 }
 
-function addHistory(room, actor, label) {
+export function privateZoneForSeat(seatIndex) {
+  const positions = [[205, 825], [915, 825], [205, -205], [915, -205], [-505, 240], [1625, 240], [-505, 645], [1625, 645]];
+  const [x, y] = positions[seatIndex % positions.length];
+  return { x, y, width: 660, height: 380 };
+}
+
+function privateZoneForPlayer(room, playerId) {
+  const player = requirePlayer(room, playerId);
+  return player.privateZone || privateZoneForSeat(player.seatIndex);
+}
+
+function privateSlot(zone, index) {
+  const columns = Math.max(1, Math.floor((zone.width - 36 - TABLE_GEOMETRY.cardWidth) / 106) + 1);
+  const rows = Math.max(1, Math.floor((zone.height - 64 - TABLE_GEOMETRY.cardHeight) / 150) + 1);
+  const slot = index % (columns * rows), offset = Math.floor(index / (columns * rows)) * 7;
+  return {
+    x: Math.min(zone.x + zone.width - 18 - TABLE_GEOMETRY.cardWidth, zone.x + 18 + slot % columns * 106 + offset),
+    y: Math.min(zone.y + zone.height - 16 - TABLE_GEOMETRY.cardHeight, zone.y + 48 + Math.floor(slot / columns) * 150 + offset)
+  };
+}
+
+export function privateCardPosition(room, card) {
+  if (Number.isFinite(card.x) && Number.isFinite(card.y)) return { x: card.x, y: card.y, rotation: card.rotation || 0, z: card.z || 0 };
+  const cards = [...room.cards.values()].filter((item) => item.zone === "hand" && item.ownerId === card.ownerId).sort((a, b) => a.handOrder - b.handOrder);
+  return { ...privateSlot(privateZoneForPlayer(room, card.ownerId), Math.max(0, cards.findIndex((item) => item.id === card.id))), rotation: card.rotation || 0, z: card.handOrder || 0 };
+}
+
+function privateDropPoint(room, ownerId, command = {}, excludedIds = []) {
+  const zone = privateZoneForPlayer(room, ownerId);
+  if (command.x !== undefined || command.y !== undefined) {
+    if (!Number.isFinite(command.x) || !Number.isFinite(command.y)) throw new RoomError("INVALID_DROP", "没有收到有效的私人区位置。");
+    return {
+      x: clamp(command.x, zone.x + 18, zone.x + zone.width - 18 - TABLE_GEOMETRY.cardWidth),
+      y: clamp(command.y, zone.y + 48, zone.y + zone.height - 16 - TABLE_GEOMETRY.cardHeight)
+    };
+  }
+  const placed = [...room.cards.values()].filter((card) => card.zone === "hand" && card.ownerId === ownerId && !excludedIds.includes(card.id)).map((card) => privateCardPosition(room, card));
+  for (let index = 0; index <= placed.length + 24; index++) {
+    const point = privateSlot(zone, index);
+    if (!placed.some((item) => Math.abs(item.x - point.x) < 5 && Math.abs(item.y - point.y) < 5)) return point;
+  }
+  return privateSlot(zone, placed.length);
+}
+
+function placeInHand(room, card, ownerId, point, rotation = 0) {
+  const sameHand = card.zone === "hand" && card.ownerId === ownerId;
+  Object.assign(card, {
+    ...(point || privateDropPoint(room, ownerId, {}, [card.id])),
+    zone: "hand", ownerId, faceUp: false, rotation: clamp(Number(rotation) || 0, -180, 180),
+    handOrder: sameHand ? card.handOrder : room.nextHandOrder++, z: room.nextZ++
+  });
+}
+
+export function requestPrivateCards(room, playerId, cardIds, now = Date.now()) {
+  const actor = requirePlayer(room, playerId);
+  if (!Array.isArray(cardIds) || cardIds.length < 1 || cardIds.length > 12 || cardIds.some((id) => typeof id !== "string") || new Set(cardIds).size !== cardIds.length) {
+    throw new RoomError("INVALID_CARD_REQUEST", "每次可以标记 1–12 张私有牌。");
+  }
+  const cards = cardIds.map((id) => requireCard(room, String(id)));
+  if (cards.some((card) => card.deckId === room.holdem?.deckId)) throw new RoomError("HOLDEM_MANAGED", "德州底牌不能通过标记转交，请在德州面板继续。", 409);
+  const ownerId = cards[0].ownerId;
+  if (ownerId === actor.id || cards.some((card) => card.zone !== "hand" || card.ownerId !== ownerId)) {
+    throw new RoomError("INVALID_CARD_REQUEST", "请选择同一位朋友私人区里的牌。");
+  }
+  requirePlayer(room, ownerId);
+  const signal = { type: "card-request", id: randomUUID(), playerId: actor.id, ownerId, name: actor.name, color: actor.color, cardIds: [...cardIds], at: now, expiresAt: now + 8000 };
+  room.cardRequests.set(actor.id, signal);
+  return structuredClone(signal);
+}
+
+export function cancelPrivateCardRequest(room, playerId) {
+  requirePlayer(room, playerId);
+  room.cardRequests.delete(playerId);
+  return { type: "card-request-end", playerId };
+}
+
+function addHistory(room, actor, label, details = {}) {
   room.history.push({
     id: randomUUID(),
     at: Date.now(),
     actorId: actor.id,
     actorName: actor.name,
-    label
+    actorColor: actor.color,
+    label,
+    ...details
   });
-  room.history = room.history.slice(-16);
+  room.history = room.history.slice(-500);
 }
 
 function touch(room) {
@@ -244,6 +323,7 @@ function spreadStackPositions(cards) {
 
 function removePlayers(room, playerIds) {
   const removedIds = new Set(playerIds);
+  if (room.holdem?.players.some((player) => removedIds.has(player.playerId))) throw new RoomError("HOLDEM_SEAT", "这位玩家仍在德州对局中，请先结束德州助手再释放席位。", 409);
   const returnedCards = [];
 
   for (const card of room.cards.values()) {
@@ -527,9 +607,9 @@ function captureBoard(room) {
     die: { ...room.die },
     counter: { ...room.counter },
     turn: { ...room.turn },
+    holdem: structuredClone(room.holdem),
     nextHandOrder: room.nextHandOrder,
-    nextZ: room.nextZ,
-    history: room.history.map((entry) => ({ ...entry }))
+    nextZ: room.nextZ
   };
 }
 
@@ -539,6 +619,8 @@ function saveUndoPoint(room) {
 }
 
 function restoreBoard(room, snapshot) {
+  room.cardRequests.clear();
+  room.epoch = randomUUID();
   room.decks = new Map(structuredClone(snapshot.decks));
   room.objects = new Map(structuredClone(snapshot.objects));
   room.templates = new Map(structuredClone(snapshot.templates));
@@ -554,9 +636,9 @@ function restoreBoard(room, snapshot) {
   room.die = { ...snapshot.die };
   room.counter = { ...snapshot.counter };
   room.turn = { ...snapshot.turn };
+  room.holdem = structuredClone(snapshot.holdem || null);
   room.nextHandOrder = snapshot.nextHandOrder;
   room.nextZ = snapshot.nextZ;
-  room.history = snapshot.history.map((entry) => ({ ...entry }));
 }
 
 export function createRoom({
@@ -637,6 +719,8 @@ export function createRoom({
 
   const room = {
     code,
+    gameId: randomUUID(),
+    epoch: randomUUID(),
     title: cleanName(pack.tableTitle, "朋友牌室"),
     hostName: cleanName(hostName, "玩家1"),
     hostSecret,
@@ -658,6 +742,11 @@ export function createRoom({
     objects: new Map(),
     templates: new Map(),
     messages: [],
+    cardRequests: new Map(),
+    commandReceipts: new Map(),
+    holdem: null,
+    receiptFloorRevision: -1,
+    persistence: { enabled: false, savedAt: null, error: null },
     die: {
       label: cleanName(pack.die?.label, `公共 D${dieSides}`),
       sides: dieSides,
@@ -712,6 +801,7 @@ export function replaceRoomPack(room, playerId, pack, { randomizeDeck = true } =
   });
 
   room.title = replacement.title;
+  room.holdem = null; room.epoch = randomUUID();
   room.pack = replacement.pack;
   room.cards = replacement.cards;
   room.tokens = replacement.tokens;
@@ -725,19 +815,37 @@ export function replaceRoomPack(room, playerId, pack, { randomizeDeck = true } =
   room.nextHandOrder = replacement.nextHandOrder;
   room.nextZ = replacement.nextZ;
   room.undoStack = [];
-  addHistory(room, actor, `换上了「${room.pack.name}」牌盒`);
+  addHistory(room, actor, `换上了「${room.pack.name}」牌盒`, { action: "replace-pack" });
   touch(room);
 }
 
-export function joinRoom(room, { displayName, hostSecret, resumeToken } = {}) {
+function createPlayerSession(room, player) {
+  const sessionToken = randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", "");
+  room.sessions.set(sessionToken, player.id);
+  const sessions = [...room.sessions].filter(([, id]) => id === player.id);
+  for (const [token] of sessions.slice(0, -16)) room.sessions.delete(token);
+  return sessionToken;
+}
+
+export function joinRoom(room, { displayName, hostSecret, resumeToken, seatKey } = {}) {
   if (resumeToken && room.sessions.has(resumeToken)) {
     const playerId = room.sessions.get(resumeToken);
     const player = room.players.get(playerId);
     if (player) {
       player.lastSeenAt = Date.now();
+      room.sessions.delete(resumeToken);
+      room.sessions.set(resumeToken, player.id);
       return { player, sessionToken: resumeToken, resumed: true };
     }
     room.sessions.delete(resumeToken);
+  }
+  if (resumeToken) throw new RoomError("SESSION_EXPIRED", "上次连接已失效，请用个人续局链接重新入座。", 401);
+  if (seatKey) {
+    const player = [...room.players.values()].find((candidate) => candidate.recoveryKey === seatKey);
+    if (!player) throw new RoomError("INVALID_SEAT_LINK", "这个续局口令不属于当前对局，请向房主索取个人链接。", 403);
+    const sessionToken = createPlayerSession(room, player);
+    player.lastSeenAt = Date.now();
+    return { player, sessionToken, resumed: true };
   }
 
   const joiningAsHost = Boolean(hostSecret);
@@ -754,6 +862,7 @@ export function joinRoom(room, { displayName, hostSecret, resumeToken } = {}) {
         name: uniqueName(room, displayName || room.hostName, "玩家1"),
         color: nextAvailableColor(room, 0),
         role: "host",
+        recoveryKey: randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", ""),
         seatIndex: 0,
         connections: 0,
         joinedAt: Date.now(),
@@ -775,6 +884,7 @@ export function joinRoom(room, { displayName, hostSecret, resumeToken } = {}) {
       name: uniqueName(room, displayName, fallback),
       color: nextAvailableColor(room),
       role: "guest",
+      recoveryKey: randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", ""),
       seatIndex: nextAvailableSeatIndex(room),
       connections: 0,
       joinedAt: Date.now(),
@@ -786,8 +896,7 @@ export function joinRoom(room, { displayName, hostSecret, resumeToken } = {}) {
     touch(room);
   }
 
-  const sessionToken = randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", "");
-  room.sessions.set(sessionToken, player.id);
+  const sessionToken = createPlayerSession(room, player);
   return { player, sessionToken, resumed: false };
 }
 
@@ -812,6 +921,7 @@ export const RESOURCE_CATALOG = Object.freeze([
   { id: "bag", kind: "bag", label: "抽抽袋", description: "装进去，再随机摸一个", width: 112, height: 128, color: "#ccb390" },
   { id: "chessboard", kind: "mat", label: "方格棋盘", description: "一块 8 × 8 的自由棋盘", width: 640, height: 640, pattern: "checker", color: "#8ba995" },
   { id: "playmat", kind: "mat", label: "游戏桌垫", description: "在世界里圈一块自己的地盘", width: 960, height: 660, pattern: "plain", color: "#527565" },
+  { id: "holdem-mat", kind: "mat", label: "德州桌垫", description: "五张公共牌与底池的位置", width: 1280, height: 660, pattern: "poker", color: "#315d47" },
   { id: "token-black", kind: "token", label: "黑棋子", description: "五子棋、跳棋，或者占个位", symbol: "", color: "#29312e" },
   { id: "token-white", kind: "token", label: "白棋子", description: "有黑就有白", symbol: "", color: "#eee8d9" },
   { id: "token-red", kind: "token", label: "红筹码", description: "筹码、血量、行动点", symbol: "1", color: "#c96554" },
@@ -849,7 +959,7 @@ export function addRoomPack(room, playerId, pack, position = {}) {
     token.homeY = token.y;
     room.tokens.set(token.id, token);
   }
-  addHistory(room, actor, `拿出了「${pack.name}」`);
+  addHistory(room, actor, `拿出了「${pack.name}」`, { action: "add-pack" });
   touch(room);
   return deckId;
 }
@@ -1016,7 +1126,7 @@ function applyResourceCommand(room, actor, command) {
           return card.id;
         }));
       }
-      if (type === "card" && copy.zone === "hand") { copy.handOrder = room.nextHandOrder++; copy.x = null; copy.y = null; }
+      if (type === "card" && copy.zone === "hand") { copy.handOrder = room.nextHandOrder++; placeInHand(room, copy, copy.ownerId); }
       if (type === "token") { copy.homeX = copy.x; copy.homeY = copy.y; }
       map.set(copy.id, copy);
       return commit(`复制了「${resource.label || "卡牌"}」`, { type, id: copy.id });
@@ -1070,18 +1180,137 @@ function applyResourceCommand(room, actor, command) {
     bag.contents.splice(index, 1);
     delete resource.bagId;
     if (entry.type === "card") {
-      Object.assign(resource, { zone: "hand", ownerId: actor.id, handOrder: room.nextHandOrder++, x: null, y: null, faceUp: false });
+      placeInHand(room, resource, actor.id);
     } else Object.assign(resource, objectDropPoint({ x: bag.x + 150, y: bag.y + 10 }, resource), { z: room.nextZ++ });
     return commit(`从「${bag.label}」摸出了一个物件`);
   }
   return false;
 }
 
+function guardHoldemResources(room, playerId, command) {
+  const holdem = room.holdem;
+  if (!holdem || typeof command?.type === "string" && command.type.startsWith("holdem-")) return;
+  const fail = () => { throw new RoomError("HOLDEM_MANAGED", "这副牌由德州助手管理；底牌可以在自己的私人区整理。请用德州面板继续这一手。", 409); };
+  if (["reset", "collect-public", "tidy-public", "set-turn", "advance-turn", "random-turn"].includes(command?.type)) fail();
+  let cards = command?.cardId ? [room.cards.get(command.cardId)].filter(Boolean) : [];
+  if (["move-stack", "draw-stack", "shuffle-stack", "spread-stack"].includes(command?.type) && cards[0]?.zone === "public") cards = publicStackForCard(room, command.cardId);
+  if (command?.type === "accept-card-request") {
+    const request = [...room.cardRequests.values()].find((item) => item.id === command.requestId);
+    cards = (request?.cardIds || []).map((id) => room.cards.get(id)).filter(Boolean);
+  }
+  if (command?.resourceType === "card") cards.push(room.cards.get(command.resourceId));
+  if (cards.some((card) => card?.deckId === holdem.deckId)) {
+    const card = cards[0];
+    const ownPrivateMove = card?.zone === "hand" && card.ownerId === playerId && (
+      command.type === "rotate-card" || command.type === "move-card" && command.target === "hand" && (!command.ownerId || command.ownerId === playerId));
+    if (!ownPrivateMove) fail();
+  }
+  if (command?.deckId === holdem.deckId || [holdem.deckId, holdem.matId].includes(command?.resourceId)) fail();
+}
+
+function syncHoldemCards(room, state, order, { resetCards = false } = {}) {
+  const deck = room.decks.get(state.deckId), mat = room.objects.get(state.matId);
+  const hands = new Map(state.players.flatMap((player) => player.holeCards.map((id) => [id, player])));
+  for (const card of room.cards.values()) {
+    if (card.deckId !== state.deckId) continue;
+    const hand = hands.get(card.id), boardIndex = state.board.indexOf(card.id), burnIndex = state.burns.indexOf(card.id);
+    if (hand && !hand.revealed) {
+      if (resetCards || card.zone !== "hand" || card.ownerId !== hand.playerId) placeInHand(room, card, hand.playerId);
+    } else if (hand?.revealed) {
+      if (card.zone !== "public") Object.assign(card, privateCardPosition(room, card), { zone: "public", ownerId: null, faceUp: true, z: room.nextZ++ });
+      card.faceUp = true;
+    } else if (boardIndex >= 0 || burnIndex >= 0) {
+      const index = boardIndex >= 0 ? boardIndex : burnIndex;
+      if (card.zone !== "public" || resetCards) card.z = room.nextZ++;
+      Object.assign(card, { zone: "public", ownerId: null, faceUp: boardIndex >= 0, rotation: 0, handOrder: 0,
+        x: boardIndex >= 0 ? mat.x + 370 + index * 108 : deck.x + 125 + index * 3,
+        y: boardIndex >= 0 ? mat.y + 228 : deck.y + index * 3 });
+    } else Object.assign(card, { zone: "deck", ownerId: null, x: null, y: null, faceUp: false, rotation: 0, z: 0, handOrder: 0 });
+    card.locked = false;
+  }
+  deck.order = order; room.holdem = state; room.turn.activePlayerId = state.actorId;
+  room.cardRequests.clear();
+}
+
+function applyHoldemTableCommand(room, actor, command) {
+  try {
+    if (command.type === "holdem-setup") {
+      if (actor.role !== "host") throw new RoomError("HOST_ONLY", "由房主开启德州助手。", 403);
+      if (room.holdem) throw new RoomError("HOLDEM_EXISTS", "这桌已经有德州助手了。", 409);
+      const ids = command.playerIds || [...room.players.keys()];
+      if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) throw new RoomError("HOLDEM_PLAYERS", "请先选择参加德州的玩家。");
+      const state = createHoldemState(ids.map((id) => requirePlayer(room, id)), command);
+      checkResourceCapacity(room, 52, 1, 1);
+      const prepared = createRoom({ code: "HOLDEM", pack: createHoldemPack(), randomizeDeck: false });
+      const preset = RESOURCE_CATALOG.find((entry) => entry.id === "holdem-mat");
+      const point = objectDropPoint({ x: command.x ?? 205, y: command.y ?? 1320 }, preset);
+      const deckId = `deck_${randomUUID().replaceAll("-", "")}`, matId = `object_${randomUUID().replaceAll("-", "")}`;
+      const deck = { ...prepared.decks.get("main"), id: deckId, x: point.x + 138, y: point.y + 228, locked: true };
+      const mat = { ...preset, resourceId: preset.id, id: matId, ...point, rotation: 0, locked: true };
+      delete mat.description;
+      saveUndoPoint(room);
+      deck.z = room.nextZ++; mat.z = room.nextZ++;
+      for (const card of prepared.cards.values()) { card.deckId = deckId; room.cards.set(card.id, card); }
+      room.decks.set(deckId, deck); room.objects.set(matId, mat);
+      state.deckId = deckId; state.matId = matId; room.holdem = state;
+      addHistory(room, actor, `开启德州助手：${state.players.length} 人，每人 ${state.buyIn} 筹码，盲注 ${state.smallBlind}/${state.bigBlind}`);
+      touch(room); return { createdResource: { type: "object", id: matId } };
+    }
+    if (!room.holdem) throw new RoomError("NO_HOLDEM", "请先开启德州助手。", 409);
+    if (command.decision !== undefined && command.decision !== room.holdem.decision) throw new RoomError("HOLDEM_STALE", "行动轮次已经变化，这项旧操作没有执行，请确认当前牌局。", 409);
+    const cards = [...room.cards.values()].filter((card) => card.deckId === room.holdem.deckId);
+    if (command.type === "holdem-close") {
+      if (actor.role !== "host") throw new RoomError("HOST_ONLY", "由房主结束德州助手。", 403);
+      if (!["waiting", "complete"].includes(room.holdem.phase)) throw new RoomError("HOLDEM_IN_PROGRESS", "请先完成当前这一手，再结束德州助手。", 409);
+      saveUndoPoint(room);
+      const deck = room.decks.get(room.holdem.deckId);
+      for (const card of cards) Object.assign(card, { zone: "deck", ownerId: null, x: null, y: null, faceUp: false, rotation: 0, handOrder: 0, locked: false });
+      rekeyCards(room, cards); deck.order = shuffled(cards.map((card) => card.id)); deck.locked = false;
+      room.objects.get(room.holdem.matId).locked = false; room.holdem = null; room.turn.activePlayerId = null;
+      addHistory(room, actor, "结束德州助手，牌盒与桌垫留在桌上"); touch(room); return;
+    }
+    const result = planHoldem(room.holdem, command, { actor, players: [...room.players.values()], faceForCard: (id) => room.cards.get(id)?.face,
+      deckOrder: command.type === "holdem-start" ? shuffled(cards.map((card) => card.id)) : room.decks.get(room.holdem.deckId).order });
+    saveUndoPoint(room);
+    if (result.resetCards) {
+      const oldIds = cards.map((card) => card.id);
+      rekeyCards(room, cards);
+      const mapping = new Map(cards.map((card, index) => [oldIds[index], card.id]));
+      result.state = remapHoldem(result.state, mapping); result.deckOrder = result.deckOrder.map((id) => mapping.get(id));
+    }
+    syncHoldemCards(room, result.state, result.deckOrder, result);
+    addHistory(room, actor, result.label); touch(room);
+  } catch (error) {
+    if (error instanceof HoldemError) throw new RoomError(error.code, error.message, error.status);
+    throw error;
+  }
+}
+
 export function applyCommand(room, playerId, command) {
+  guardHoldemResources(room, playerId, command);
+  const previousId = room.history.at(-1)?.id;
+  const previousUndo = room.undoStack.at(-1);
+  const source = command?.type === "shuffle" ? room.decks.get(String(command.deckId || "main"))
+    : command?.type === "shuffle-stack" ? room.cards.get(String(command.cardId || "")) : null;
+  const effect = source ? { type: "shuffle", x: source.x, y: source.y } : null;
+  const result = applyTabletopCommand(room, playerId, command);
+  const entry = room.history.at(-1);
+  if (entry && entry.id !== previousId) {
+    entry.action = command.type;
+    if (effect && Number.isFinite(effect.x) && Number.isFinite(effect.y)) entry.effect = effect;
+    const snapshot = room.undoStack.at(-1);
+    if (snapshot && snapshot !== previousUndo && command.type !== "undo") snapshot.actionId = entry.id;
+  }
+  return result;
+}
+
+function applyTabletopCommand(room, playerId, command) {
   const actor = requirePlayer(room, playerId);
   if (!command || typeof command.type !== "string") {
     throw new RoomError("INVALID_COMMAND", "无法识别这次操作。");
   }
+
+  if (command.type.startsWith("holdem-")) return applyHoldemTableCommand(room, actor, command);
 
   const resourceResult = applyResourceCommand(room, actor, command);
   if (resourceResult) return resourceResult === true ? undefined : resourceResult;
@@ -1096,11 +1325,43 @@ export function applyCommand(room, playerId, command) {
     touch(room);
     return;
   }
-  if (command.type === "set-presence") {
-    if (!["在桌边", "摸鱼中", "离开一下", "等人中"].includes(command.status)) throw new RoomError("INVALID_STATUS", "请选择一种桌边状态。");
-    actor.status = command.status;
+  if (command.type === "rename-player") {
+    const requested = cleanName(command.name, "");
+    if (!requested) throw new RoomError("INVALID_NAME", "昵称不能为空。");
+    const previousName = actor.name;
+    const nextName = uniqueName(room, requested, "玩家", actor.id);
+    if (nextName === previousName) return;
+    actor.name = nextName;
+    addHistory(room, actor, `由「${previousName}」改名为「${nextName}」`);
     touch(room);
     return;
+  }
+
+  if (command.type === "accept-card-request") {
+    const request = [...room.cardRequests.values()].find((item) => item.id === command.requestId);
+    if (!request || request.expiresAt <= Date.now()) throw new RoomError("REQUEST_EXPIRED", "这个选牌标记已经消失，请让朋友重新选择。", 409);
+    if (request.ownerId !== actor.id) throw new RoomError("NO_CONTROL", "只有牌的持有者可以交付这些牌。", 403);
+    const recipient = requirePlayer(room, request.playerId);
+    const cards = request.cardIds.map((id) => requireCard(room, id));
+    if (cards.some((card) => card.zone !== "hand" || card.ownerId !== actor.id)) throw new RoomError("REQUEST_CHANGED", "其中的牌已经移动，请重新选择。", 409);
+    cards.forEach(assertUnlocked);
+    saveUndoPoint(room);
+    for (const card of cards) placeInHand(room, card, recipient.id);
+    room.cardRequests.delete(request.playerId);
+    addHistory(room, actor, `把 ${cards.length} 张私有牌交给了 ${recipient.name}`);
+    touch(room);
+    return;
+  }
+
+  if (command.type === "arrange-hand") {
+    const owner = requirePlayer(room, String(command.ownerId || actor.id));
+    if (owner.id !== actor.id) throw new RoomError("NO_CONTROL", "只能整理自己的私人区。", 403);
+    const cards = [...room.cards.values()].filter((card) => card.zone === "hand" && card.ownerId === owner.id).sort((a, b) => a.handOrder - b.handOrder);
+    cards.forEach(assertUnlocked);
+    if (!cards.length) return;
+    saveUndoPoint(room);
+    cards.forEach((card, index) => placeInHand(room, card, owner.id, privateSlot(privateZoneForPlayer(room, owner.id), index)));
+    addHistory(room, actor, "整理了自己的私人区"); touch(room); return;
   }
 
   if (command.type === "undo") {
@@ -1108,7 +1369,7 @@ export function applyCommand(room, playerId, command) {
     const snapshot = room.undoStack.pop();
     if (!snapshot) throw new RoomError("NOTHING_TO_UNDO", "还没有可以撤销的牌桌操作。", 409);
     restoreBoard(room, snapshot);
-    addHistory(room, actor, "撤销了上一步操作");
+    addHistory(room, actor, "撤销了上一步操作", snapshot.actionId ? { undoOf: snapshot.actionId } : {});
     touch(room);
     return;
   }
@@ -1149,16 +1410,10 @@ export function applyCommand(room, playerId, command) {
     const requestedOwnerId = String(command.ownerId ?? "");
     const targetOwnerId = requestedOwnerId || actor.id;
     const targetOwner = requirePlayer(room, targetOwnerId);
+    const point = privateDropPoint(room, targetOwner.id, command);
     saveUndoPoint(room);
     deck.order.pop();
-    card.zone = "hand";
-    card.ownerId = targetOwner.id;
-    card.x = null;
-    card.y = null;
-    card.rotation = 0;
-    card.faceUp = false;
-    card.handOrder = room.nextHandOrder;
-    room.nextHandOrder += 1;
+    placeInHand(room, card, targetOwner.id, point);
     addHistory(room, actor, targetOwner.id === actor.id ? "抽了一张牌" : `给 ${targetOwner.name} 发了一张牌`);
     touch(room);
     return;
@@ -1211,20 +1466,14 @@ export function applyCommand(room, playerId, command) {
       const requestedOwnerId = String(command.ownerId ?? "");
       const targetOwnerId = requestedOwnerId || actor.id;
       const targetOwner = requirePlayer(room, targetOwnerId);
+      const point = privateDropPoint(room, targetOwner.id, command, [card.id]);
+      const reposition = card.zone === "hand" && card.ownerId === targetOwner.id;
       saveUndoPoint(room);
-      card.zone = "hand";
-      card.ownerId = targetOwner.id;
-      card.x = null;
-      card.y = null;
-      card.rotation = 0;
-      card.faceUp = false;
-      card.z = 0;
-      card.handOrder = room.nextHandOrder;
-      room.nextHandOrder += 1;
+      placeInHand(room, card, targetOwner.id, point, command.rotation);
       addHistory(
         room,
         actor,
-        targetOwner.id === actor.id ? "把一张牌收回手牌区" : `把一张牌交给了 ${targetOwner.name}`
+        reposition ? "调整了一张私有牌的位置" : targetOwner.id === actor.id ? "把一张牌收回私人区" : `把一张牌交给了 ${targetOwner.name}`
       );
       touch(room);
       return;
@@ -1268,14 +1517,7 @@ export function applyCommand(room, playerId, command) {
       const targetOwner = requirePlayer(room, String(command.ownerId || actor.id));
       saveUndoPoint(room);
       for (const card of cards) {
-        card.zone = "hand";
-        card.ownerId = targetOwner.id;
-        card.x = null;
-        card.y = null;
-        card.rotation = 0;
-        card.faceUp = false;
-        card.z = 0;
-        card.handOrder = room.nextHandOrder++;
+        placeInHand(room, card, targetOwner.id);
       }
       addHistory(room, actor, targetOwner.id === actor.id
         ? `把 ${cards.length} 张牌的牌堆收回手牌区`
@@ -1326,15 +1568,7 @@ export function applyCommand(room, playerId, command) {
     cards.forEach(assertUnlocked);
     const topCard = cards.at(-1);
     saveUndoPoint(room);
-    topCard.zone = "hand";
-    topCard.ownerId = actor.id;
-    topCard.x = null;
-    topCard.y = null;
-    topCard.rotation = 0;
-    topCard.faceUp = false;
-    topCard.z = 0;
-    topCard.handOrder = room.nextHandOrder;
-    room.nextHandOrder += 1;
+    placeInHand(room, topCard, actor.id);
     addHistory(room, actor, `从 ${cards.length} 张的牌堆抽了一张牌`);
     touch(room);
     return;
@@ -1478,14 +1712,7 @@ export function applyCommand(room, playerId, command) {
       for (const player of players) {
         const cardId = deck.order.pop();
         const card = requireCard(room, cardId);
-        card.zone = "hand";
-        card.ownerId = player.id;
-        card.x = null;
-        card.y = null;
-        card.rotation = 0;
-        card.faceUp = false;
-        card.handOrder = room.nextHandOrder;
-        room.nextHandOrder += 1;
+        placeInHand(room, card, player.id);
       }
     }
     addHistory(room, actor, `给每位玩家发了 ${count} 张牌`);
@@ -1572,6 +1799,10 @@ export function exportRoomScene(room, playerId, name = room.title) {
   if (requirePlayer(room, playerId).role !== "host") throw new RoomError("HOST_ONLY", "只有房主可以保存整个桌面。", 403);
   const board = captureBoard(room);
   const decks = board.decks.map(([, deck]) => deck);
+  if (board.holdem) {
+    decks.find((deck) => deck.id === board.holdem.deckId).locked = false;
+    board.objects.find(([id]) => id === board.holdem.matId)[1].locked = false;
+  }
   const cards = board.cards.map(({ ownerId, handOrder, ...card }) => {
     if (card.zone === "hand") {
       Object.assign(card, { zone: "deck", x: null, y: null, rotation: 0, faceUp: false, locked: false, z: 0 });
@@ -1633,6 +1864,7 @@ export function validateRoomScene(scene) {
       id: "scene-validation", name: "存档", version: 1,
       cardBack: { label: "存档", color: "#234434" }, die: { label: "D6", sides: 6 }, cards: [{ key: `card-${index}`, ...face }]
     });
+    for (const key of ["color", "textColor", "image"]) if (face[key] === undefined) face[key] = null;
     return {
       id: readId(source.id), deckId: source.deckId, face, zone: source.zone,
       ...(source.zone === "public" ? position(source) : { x: null, y: null, z: 0, rotation: 0, locked: false }),
@@ -1721,6 +1953,8 @@ export function restoreRoomScene(room, playerId, scene) {
   }
   for (const card of loaded.cards) card.id = newCardIds.get(card.id);
   saveUndoPoint(room);
+  room.epoch = randomUUID();
+  room.holdem = null;
   room.cards = new Map(loaded.cards.map((card) => [card.id, card]));
   room.decks = new Map(loaded.decks.map((deck) => [deck.id, deck]));
   room.tokens = new Map(loaded.tokens.map((token) => [token.id, token]));
@@ -1735,8 +1969,221 @@ export function restoreRoomScene(room, playerId, scene) {
   room.nextZ = Math.max(1, ...loaded.decks.map((deck) => deck.z), ...loaded.cards.map((card) => card.z), ...loaded.tokens.map((token) => token.z), ...loaded.objects.map((object) => object.z)) + 1;
   room.nextHandOrder = 1;
   room.turn.activePlayerId = null;
-  addHistory(room, actor, `恢复了桌面「${loaded.name}」`);
+  addHistory(room, actor, `恢复了桌面「${loaded.name}」`, { action: "restore-scene" });
   touch(room);
+}
+
+function snapshotRoomGame(room, name = room.title) {
+  const board = captureBoard(room);
+  const hands = [];
+  const cards = board.cards.map((card) => {
+    const copy = structuredClone(card);
+    if (copy.zone === "hand") {
+      hands.push({ cardId: copy.id, ownerId: copy.ownerId, handOrder: copy.handOrder });
+      Object.assign(copy, privateCardPosition(room, card), { zone: "public", faceUp: false });
+    }
+    delete copy.ownerId; delete copy.handOrder;
+    return copy;
+  });
+  return {
+    format: "parlor.game", version: 1, gameId: room.gameId,
+    name: cleanName(name, room.title), savedAt: Date.now(), maxPlayers: room.maxPlayers,
+    players: [...room.players.values()].map((player) => ({
+      id: player.id, name: player.name, color: player.color, role: player.role,
+      seatIndex: player.seatIndex, recoveryKey: player.recoveryKey,
+      privateZone: { ...privateZoneForPlayer(room, player.id) }
+    })),
+    hands, turnPlayerId: room.turn.activePlayerId,
+    table: {
+      format: "parlor.scene", version: 1, name: cleanName(name, room.title),
+      decks: board.decks.map(([, deck]) => deck), cards,
+      tokens: board.tokens.map(([, token]) => token), objects: board.objects.map(([, object]) => object),
+      components: { die: { ...board.die }, counter: { ...board.counter } }
+    },
+    templates: board.templates.map(([, template]) => template),
+    history: structuredClone(room.history), messages: structuredClone(room.messages), holdem: structuredClone(room.holdem)
+  };
+}
+
+export function exportRoomGame(room, playerId, name = room.title) {
+  if (requirePlayer(room, playerId).role !== "host") throw new RoomError("HOST_ONLY", "只有房主可以保存完整对局。", 403);
+  return snapshotRoomGame(room, name);
+}
+
+export function validateRoomGame(game, { allowEmpty = false } = {}) {
+  const fail = (message) => { throw new RoomError("INVALID_GAME", `对局存档无效：${message}`); };
+  if (!game || game.format !== "parlor.game" || game.version !== 1) fail("需要 Parlor 的完整对局文件。");
+  const validId = (id) => typeof id === "string" && /^[\w-]{1,80}$/.test(id);
+  if (!validId(game.gameId)) fail("缺少对局编号。");
+  if (!Number.isInteger(game.maxPlayers) || game.maxPlayers < 2 || game.maxPlayers > 8) fail("席位数量需要 2–8 个。");
+  if (!Array.isArray(game.players) || game.players.length > game.maxPlayers || (!allowEmpty && !game.players.length)) fail("玩家列表无效。");
+  const playerIds = new Set(), keys = new Set(), seats = new Set(), names = new Set();
+  const players = game.players.map((source) => {
+    if (!source || !validId(source.id) || playerIds.has(source.id) || !["host", "guest"].includes(source.role)) fail("玩家编号缺失或重复。");
+    if (!Number.isInteger(source.seatIndex) || source.seatIndex < 0 || source.seatIndex >= game.maxPlayers || seats.has(source.seatIndex)) fail("席位重复或越界。");
+    if (typeof source.recoveryKey !== "string" || !/^[a-f0-9]{64}$/.test(source.recoveryKey) || keys.has(source.recoveryKey)) fail("个人续局口令缺失或重复。");
+    if (!/^#[a-f0-9]{6}$/i.test(source.color || "")) fail("玩家颜色无效。");
+    const name = cleanName(source.name, "玩家");
+    if (names.has(name)) fail("玩家昵称重复。");
+    const zone = source.privateZone || privateZoneForSeat(source.seatIndex);
+    if (![zone.x, zone.y, zone.width, zone.height].every(Number.isFinite) || zone.width < 360 || zone.width > 1600 || zone.height < 250 || zone.height > 1200
+      || zone.x < -4500 || zone.y < -3000 || zone.x + zone.width > 6300 || zone.y + zone.height > 4100) fail("私人区范围无效。");
+    playerIds.add(source.id); keys.add(source.recoveryKey); seats.add(source.seatIndex); names.add(name);
+    return { id: source.id, name, color: source.color, role: source.role, seatIndex: source.seatIndex, recoveryKey: source.recoveryKey, privateZone: { x: zone.x, y: zone.y, width: zone.width, height: zone.height } };
+  });
+  const hosts = players.filter((player) => player.role === "host");
+  if (hosts.length > 1 || (!allowEmpty && hosts.length !== 1) || hosts.some((player) => player.seatIndex !== 0)
+    || players.some((player) => player.role !== "host" && player.seatIndex === 0)) fail("房主席位无效。");
+  let table;
+  try { table = validateRoomScene(game.table); } catch (error) { fail(error.message); }
+  if (!table.components) fail("缺少游戏组件。");
+  if (!Array.isArray(game.hands) || game.hands.length > table.cards.length) fail("私人牌列表无效。");
+  const cardMap = new Map(table.cards.map((card) => [card.id, card])), assigned = new Set();
+  for (const hand of game.hands) {
+    const card = cardMap.get(hand?.cardId);
+    if (!card || card.zone !== "public" || card.faceUp || assigned.has(card.id) || !playerIds.has(hand.ownerId)) fail("私人牌的归属或区域不一致。");
+    if (!Number.isSafeInteger(hand.handOrder) || hand.handOrder < 1 || hand.handOrder > 1000000) fail("私人牌顺序无效。");
+    assigned.add(card.id);
+    Object.assign(card, { zone: "hand", ownerId: hand.ownerId, handOrder: hand.handOrder, faceUp: false });
+  }
+  if (game.turnPlayerId !== null && game.turnPlayerId !== undefined && !playerIds.has(game.turnPlayerId)) fail("行动玩家不在席位中。");
+  if (!Array.isArray(game.templates) || game.templates.length > 40) fail("本桌资源库无效。");
+  const templateIds = new Set();
+  const templates = game.templates.map((source) => {
+    if (!source || !validId(source.id) || templateIds.has(source.id) || !["deck", "object", "token"].includes(source.type) || !source.resource || !Array.isArray(source.cards)) fail("收藏资源结构无效。");
+    templateIds.add(source.id);
+    const originalId = source.resource.id;
+    if (!validId(originalId)) fail("收藏物件编号无效。");
+    const sample = { format: "parlor.scene", version: 1, decks: [{ ...table.decks.find((deck) => deck.id === "main"), order: [] }], cards: [], tokens: [], objects: [] };
+    if (source.type === "deck") {
+      sample.decks = [{ ...source.resource, id: "main" }];
+      sample.cards = source.cards.map((card) => ({ ...card, deckId: "main", zone: "deck" }));
+    } else {
+      if (source.cards.length || source.resource.bagId || source.resource.contents?.length) fail("收藏不能携带容器中的物件。");
+      sample[source.type === "token" ? "tokens" : "objects"] = [source.resource];
+    }
+    let validated;
+    try { validated = validateRoomScene(sample); } catch (error) { fail(error.message); }
+    const resource = source.type === "deck" ? validated.decks[0] : source.type === "token" ? validated.tokens[0] : validated.objects[0];
+    resource.id = originalId;
+    const cards = validated.cards.map((card) => ({ ...card, deckId: originalId }));
+    return { id: source.id, label: cleanName(source.label, resource.label), type: source.type, kind: source.type === "deck" ? "deck" : resource.kind || "token", resource, cards,
+      creatorId: validId(source.creatorId) ? source.creatorId : "", count: source.type === "deck" ? cards.length : 1 };
+  });
+  if (!Array.isArray(game.history) || game.history.length > 500) fail("操作历史无效。");
+  const history = game.history.map((entry) => {
+    if (!entry || !validId(entry.id) || !validId(entry.actorId) || !Number.isFinite(entry.at) || entry.at < 0 || typeof entry.label !== "string" || entry.label.length > 600) fail("操作记录不完整。");
+    return { id: entry.id, at: entry.at, actorId: entry.actorId, actorName: cleanName(entry.actorName, "玩家"),
+      actorColor: /^#[a-f0-9]{6}$/i.test(entry.actorColor || "") ? entry.actorColor : "#7b946d", label: entry.label,
+      action: typeof entry.action === "string" ? entry.action.slice(0, 60) : "table",
+      ...(validId(entry.undoOf) ? { undoOf: entry.undoOf } : {}) };
+  });
+  if (!Array.isArray(game.messages || []) || (game.messages || []).length > 60) fail("聊天记录无效。");
+  const messages = (game.messages || []).map((message) => {
+    if (!message || !validId(message.id) || !validId(message.playerId) || !Number.isFinite(message.at)
+      || typeof message.text !== "string" || Array.from(message.text).length > 280) fail("聊天记录不完整。");
+    return { id: message.id, playerId: message.playerId, at: message.at, text: message.text,
+      name: cleanName(message.name, "玩家"), color: safeTokenColor(message.color) };
+  });
+  let holdem;
+  try { holdem = validateHoldemState(game.holdem, { players, ...table }); } catch (error) { fail(error.message); }
+  return { gameId: game.gameId, name: cleanName(game.name, table.name), maxPlayers: game.maxPlayers, players, table, templates, history, messages, holdem, turnPlayerId: game.turnPlayerId || null };
+}
+
+function installGameBoard(room, loaded, playerMap = new Map(), { rekey = false } = {}) {
+  const { table } = loaded;
+  const cardMap = new Map(table.cards.map((card) => [card.id, rekey ? `card_${randomUUID().replaceAll("-", "")}` : card.id]));
+  for (const card of table.cards) {
+    card.id = cardMap.get(card.id);
+    if (card.ownerId) card.ownerId = playerMap.get(card.ownerId) || card.ownerId;
+  }
+  for (const deck of table.decks) deck.order = deck.order.map((id) => cardMap.get(id));
+  for (const bag of table.objects.filter((object) => object.kind === "bag")) for (const entry of bag.contents) if (entry.type === "card") entry.id = cardMap.get(entry.id);
+  room.cards = new Map(table.cards.map((card) => [card.id, card]));
+  room.decks = new Map(table.decks.map((deck) => [deck.id, deck]));
+  room.tokens = new Map(table.tokens.map((token) => [token.id, token]));
+  room.objects = new Map(table.objects.map((object) => [object.id, object]));
+  room.templates = new Map(loaded.templates.map((template) => [template.id, { ...template, creatorId: playerMap.get(template.creatorId) || template.creatorId }]));
+  room.die = table.components.die; room.counter = table.components.counter;
+  room.turn = { activePlayerId: playerMap.get(loaded.turnPlayerId) || loaded.turnPlayerId };
+  room.holdem = remapHoldem(loaded.holdem, cardMap, playerMap);
+  room.title = loaded.name; room.gameId = loaded.gameId; room.maxPlayers = loaded.maxPlayers;
+  const main = room.decks.get("main");
+  room.pack = { id: main.packId, name: main.label, version: 1, cardBack: main.back };
+  room.nextZ = Math.max(0, ...[...room.cards.values(), ...room.decks.values(), ...room.tokens.values(), ...room.objects.values()].map((item) => item.z || 0)) + 1;
+  room.nextHandOrder = Math.max(0, ...table.cards.map((card) => card.handOrder || 0)) + 1;
+  room.cardRequests.clear();
+}
+
+export function restoreRoomGame(room, playerId, game) {
+  const actor = requirePlayer(room, playerId);
+  if (actor.role !== "host") throw new RoomError("HOST_ONLY", "只有房主可以恢复完整对局。", 403);
+  const loaded = validateRoomGame(game);
+  if (loaded.players.some((saved) => saved.role !== "host" && saved.recoveryKey === actor.recoveryKey)) throw new RoomError("INVALID_GAME", "续局口令与当前房主席位冲突。");
+  const playerMap = new Map(), players = new Map(), kept = new Set([actor.id]);
+  for (const saved of [...loaded.players].sort((a, b) => a.seatIndex - b.seatIndex)) {
+    const id = saved.role === "host" ? actor.id : saved.id === actor.id ? `player_${randomUUID().replaceAll("-", "")}` : saved.id;
+    playerMap.set(saved.id, id);
+    const current = room.players.get(id);
+    const matched = current && (saved.role === "host" || current.recoveryKey === saved.recoveryKey);
+    if (matched) kept.add(id);
+    players.set(id, { ...saved, id, name: uniqueName({ players }, saved.role === "host" ? actor.name : saved.name, "玩家"),
+      recoveryKey: saved.role === "host" ? actor.recoveryKey : saved.recoveryKey,
+      connections: matched ? current.connections : 0, joinedAt: matched ? current.joinedAt : Date.now(), lastSeenAt: Date.now() });
+  }
+  const audit = new Map(room.history.map((entry) => [entry.id, entry]));
+  for (const entry of loaded.history) if (!audit.has(entry.id)) audit.set(entry.id, { ...entry, actorId: playerMap.get(entry.actorId) || entry.actorId });
+  installGameBoard(room, loaded, playerMap, { rekey: true });
+  room.epoch = randomUUID();
+  room.players = players;
+  room.sessions = new Map([...room.sessions].filter(([, id]) => kept.has(id)));
+  room.history = [...audit.values()].sort((a, b) => a.at - b.at).slice(-499);
+  room.messages = loaded.messages.map((message) => ({ ...message, playerId: playerMap.get(message.playerId) || message.playerId }));
+  room.undoStack = [];
+  room.nextGuestNumber = players.size + 1; room.nextSeatIndex = Math.max(...[...players.values()].map((player) => player.seatIndex)) + 1;
+  addHistory(room, players.get(actor.id), `恢复了对局「${loaded.name}」`, { action: "restore-game" });
+  touch(room);
+}
+
+export function exportRoomCheckpoint(room) {
+  return {
+    format: "parlor.room", version: 1, code: room.code, hostSecret: room.hostSecret, hostName: room.hostName,
+    revision: room.revision, epoch: room.epoch, receiptFloorRevision: room.receiptFloorRevision, savedAt: Date.now(), game: snapshotRoomGame(room),
+    sessions: [...room.sessions], commandReceipts: [...room.commandReceipts], messages: structuredClone(room.messages)
+  };
+}
+
+export function roomFromCheckpoint(checkpoint) {
+  if (!checkpoint || checkpoint.format !== "parlor.room" || checkpoint.version !== 1 || typeof checkpoint.code !== "string" || !/^[A-Z0-9-]{3,24}$/.test(checkpoint.code)
+    || typeof checkpoint.hostSecret !== "string" || checkpoint.hostSecret.length < 8 || checkpoint.hostSecret.length > 256
+    || !Number.isSafeInteger(checkpoint.revision) || checkpoint.revision < 0) throw new RoomError("INVALID_CHECKPOINT", "房间续局文件不完整或版本不支持。");
+  const loaded = validateRoomGame(checkpoint.game, { allowEmpty: true });
+  const main = loaded.table.decks.find((deck) => deck.id === "main");
+  const room = createRoom({ code: checkpoint.code, hostSecret: checkpoint.hostSecret, hostName: checkpoint.hostName,
+    pack: { id: main.packId, name: main.label, version: 1, die: { label: "D6", sides: 6 }, cardBack: { label: main.back.label, theme: main.back.theme, color: main.back.color, ...(main.back.image ? { image: main.back.image } : {}) }, cards: [{ key: "bootstrap", label: "占位", rank: "1", suit: "none", symbol: "●" }] } });
+  installGameBoard(room, loaded);
+  room.players = new Map(loaded.players.map((player) => [player.id, { ...player, connections: 0, joinedAt: checkpoint.savedAt || Date.now(), lastSeenAt: Date.now() }]));
+  if (!Array.isArray(checkpoint.sessions) || checkpoint.sessions.length > 1024) throw new RoomError("INVALID_CHECKPOINT", "房间连接记录无效。");
+  for (const entry of checkpoint.sessions) {
+    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string" || !/^[a-f0-9]{64}$/.test(entry[0]) || !room.players.has(entry[1])) throw new RoomError("INVALID_CHECKPOINT", "房间连接凭据无效。");
+  }
+  room.sessions = new Map(checkpoint.sessions);
+  if (!Array.isArray(checkpoint.commandReceipts || []) || (checkpoint.commandReceipts || []).length > 1024) throw new RoomError("INVALID_CHECKPOINT", "操作回执记录无效。");
+  for (const entry of checkpoint.commandReceipts || []) {
+    if (!Array.isArray(entry) || entry.length !== 2) throw new RoomError("INVALID_CHECKPOINT", "操作回执格式无效。");
+    const [key, receipt] = entry;
+    if (typeof key !== "string" || key.length > 200 || !receipt || !/^[a-f0-9]{64}$/.test(receipt.fingerprint || "") || !Number.isSafeInteger(receipt.revision)) throw new RoomError("INVALID_CHECKPOINT", "操作回执格式无效。");
+    const created = receipt.createdResource;
+    if (created && (!["card", "deck", "token", "object"].includes(created.type) || typeof created.id !== "string" || !/^[\w-]{1,80}$/.test(created.id))) throw new RoomError("INVALID_CHECKPOINT", "物件回执格式无效。");
+    room.commandReceipts.set(key, { fingerprint: receipt.fingerprint, revision: receipt.revision, ...(created ? { createdResource: { type: created.type, id: created.id } } : {}) });
+  }
+  room.history = loaded.history;
+  room.messages = loaded.messages;
+  if (typeof checkpoint.epoch === "string" && /^[\w-]{1,80}$/.test(checkpoint.epoch)) room.epoch = checkpoint.epoch;
+  if (Number.isSafeInteger(checkpoint.receiptFloorRevision) && checkpoint.receiptFloorRevision >= -1) room.receiptFloorRevision = checkpoint.receiptFloorRevision;
+  room.revision = checkpoint.revision + 1;
+  room.nextGuestNumber = room.players.size + 1; room.nextSeatIndex = Math.max(0, ...loaded.players.map((player) => player.seatIndex)) + 1;
+  return room;
 }
 
 export function projectRoom(room, viewerId) {
@@ -1748,7 +2195,7 @@ export function projectRoom(room, viewerId) {
       name: player.name,
       color: player.color,
       role: player.role,
-      status: player.status || "在桌边",
+      privateZone: { ...privateZoneForPlayer(room, player.id) },
       seatIndex: player.seatIndex,
       online: player.connections > 0
     }));
@@ -1761,18 +2208,20 @@ export function projectRoom(room, viewerId) {
     })
     .map((card) => {
       const canSeeFace = (card.zone === "public" && card.faceUp) || (card.zone === "hand" && card.ownerId === viewer.id);
+      const position = card.zone === "hand" ? privateCardPosition(room, card) : card;
       return {
         id: card.id,
         deckId: card.deckId,
+        managedBy: card.deckId === room.holdem?.deckId ? "holdem" : null,
         back: projectBack(requireDeck(room, card.deckId).back),
         locked: Boolean(card.locked),
         zone: card.zone,
         ownerId: card.ownerId,
-        x: card.x,
-        y: card.y,
+        x: position.x,
+        y: position.y,
         rotation: card.rotation,
         faceUp: card.faceUp,
-        z: card.z,
+        z: position.z,
         handOrder: card.handOrder,
         face: canSeeFace
           ? {
@@ -1786,7 +2235,7 @@ export function projectRoom(room, viewerId) {
               hasImage: Boolean(card.face.image)
             }
           : null,
-        canControl: canControlCard(viewer, card)
+        canControl: card.deckId === room.holdem?.deckId ? card.zone === "hand" && card.ownerId === viewer.id : canControlCard(viewer, card)
       };
     });
 
@@ -1813,6 +2262,8 @@ export function projectRoom(room, viewerId) {
     serverTime: Date.now(),
     room: {
       code: room.code,
+      gameId: room.gameId,
+      epoch: room.epoch,
       title: room.title,
       shareUrl: room.shareUrl,
       maxPlayers: room.maxPlayers,
@@ -1841,7 +2292,8 @@ export function projectRoom(room, viewerId) {
       id: viewer.id,
       name: viewer.name,
       color: viewer.color,
-      role: viewer.role
+      role: viewer.role,
+      recoveryKey: viewer.recoveryKey
     },
     players,
     deck: {
@@ -1853,7 +2305,7 @@ export function projectRoom(room, viewerId) {
     decks: [...room.decks.values()].map((deck) => ({
       id: deck.id, label: deck.label, packId: deck.packId, back: projectBack(deck.back),
       x: deck.x, y: deck.y, z: deck.z, locked: Boolean(deck.locked),
-      count: deck.order.length, canDraw: deck.order.length > 0,
+      count: deck.order.length, canDraw: deck.order.length > 0 && deck.id !== room.holdem?.deckId, managedBy: deck.id === room.holdem?.deckId ? "holdem" : null,
       publicCount: [...room.cards.values()].filter((card) => card.deckId === deck.id && card.zone === "public").length
     })),
     objects: [...room.objects.values()].filter((object) => !object.bagId).map(({ contents, ...object }) => ({
@@ -1865,7 +2317,9 @@ export function projectRoom(room, viewerId) {
     counter: { ...room.counter },
     turn: { ...room.turn },
     canUndo: viewer.role === "host" && room.undoStack.length > 0,
-    history: room.history.slice(-16)
+    persistence: { ...room.persistence },
+    holdem: projectHoldem(room.holdem, viewerId),
+    history: room.history.slice(-500)
   };
 }
 
@@ -1873,6 +2327,7 @@ export function roomSummary(room) {
   return {
     roomAvailable: true,
     roomCode: room.code,
+    gameId: room.gameId,
     roomTitle: room.title,
     packName: room.pack.name,
     playerCount: room.players.size,

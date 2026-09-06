@@ -21,7 +21,7 @@ test("client boots the actual scripts and adds packs without replacing the first
   assert.equal($("room-screen").classList.contains("is-hidden"), false);
   assert.equal($("library-panel").classList.contains("is-open"), false);
   await dispatch($("open-library"), "click");
-  assert.equal($("pack-library").children.length, 15);
+  assert.equal($("pack-library").children.length, 17);
   assert.equal($("objects-root").children.length, 2);
   assert.equal($("welcome-resources").children.length, 5);
   const privateCard = app.state.cards.find((card) => card.ownerId === "player_a" && card.zone === "hand");
@@ -159,9 +159,10 @@ test("object editing, dice, library favorites and room chat are connected withou
   assert.match($("chat-messages").textContent, /先玩十分钟/);
   assert.equal($("chat-input").value, "");
   assert.equal(app.previewModel.engineRoom.undoStack.length, undoCount);
-  $("presence-select").value = "摸鱼中";
-  await dispatch($("presence-select"), "change");
-  assert.equal(app.state.players.find((player) => player.id === "player_a").status, "摸鱼中");
+  await dispatch($("identity-chip"), "click");
+  $("nickname-input").value = "小鱼";
+  await dispatch($("nickname-form"), "submit");
+  assert.equal(app.state.players.find((player) => player.id === "player_a").name, "小鱼");
   assert.equal(app.previewModel.engineRoom.undoStack.length, undoCount);
 });
 
@@ -317,7 +318,7 @@ test("secondary actions survive room updates, preserve the recipient, and close 
   await dispatch(more.querySelector('[data-selection-action="toggle-transfer"]'), "click");
   assert.equal($("selection-transfer").classList.contains("is-hidden"), false);
   $("selection-player").value = "player_b";
-  await client.sendCommand({ type: "set-presence", status: "摸鱼中" });
+  await client.sendCommand({ type: "rename-player", name: "小鱼" });
   assert.equal($("selection-player").value, "player_b", "unrelated state changes keep the chosen recipient");
   const before = app.state.cards.filter((item) => item.ownerId === "player_b" && item.zone === "hand").length;
   await dispatch($("selection-send"), "click");
@@ -355,7 +356,7 @@ test("minimap disclosure supports keyboard navigation and closes without changin
   assert.equal(app.state.revision, revision, "camera and panel controls stay local");
 });
 
-test("history opened from tools returns keyboard focus to a visible control", async () => {
+test("history is reachable from the rail and returns keyboard focus to its own control", async () => {
   const { app, document, dispatch, $ } = await loadClient();
   const revision = app.state.revision;
   await dispatch($("open-tools"), "click");
@@ -364,11 +365,11 @@ test("history opened from tools returns keyboard focus to a visible control", as
   assert.equal($("history-panel").classList.contains("is-open"), true);
   await dispatch($("close-history"), "keydown", { key: "Escape" });
   assert.equal($("history-panel").classList.contains("is-open"), false);
-  assert.equal(document.activeElement, $("open-tools"));
+  assert.equal(document.activeElement, $("open-history"));
   await dispatch($("open-tools"), "click");
   await dispatch($("open-history"), "click");
   await dispatch($("close-history"), "click");
   assert.equal($("history-panel").classList.contains("is-open"), false);
-  assert.equal(document.activeElement, $("open-tools"));
+  assert.equal(document.activeElement, $("open-history"));
   assert.equal(app.state.revision, revision);
 });

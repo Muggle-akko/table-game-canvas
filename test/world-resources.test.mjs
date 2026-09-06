@@ -192,15 +192,15 @@ for (const [mode, core] of [["server", serverCore], ["browser", browserCore]]) {
     assert.equal(state().deck.count, 53);
   });
 
-  test(`${mode}: chat and presence do not consume tabletop undo`, () => {
+  test(`${mode}: chat and nickname changes do not consume tabletop undo`, () => {
     const { room, guest, command, state } = setup();
     command({ type: "draw" });
     const undoDepth = room.undoStack.length;
     command({ type: "chat", text: "等我两分钟" }, guest);
-    command({ type: "set-presence", status: "摸鱼中" }, guest);
+    command({ type: "rename-player", name: "小鱼" }, guest);
     assert.equal(room.undoStack.length, undoDepth);
     assert.equal(state().messages[0].text, "等我两分钟");
-    assert.equal(state().players.find((player) => player.id === guest.player.id).status, "摸鱼中");
+    assert.equal(state().players.find((player) => player.id === guest.player.id).name, "小鱼");
     assert.throws(() => command({ type: "chat", text: "太快" }, guest), { code: "CHAT_TOO_FAST" });
     command({ type: "undo" });
     assert.equal(state().messages.length, 1);

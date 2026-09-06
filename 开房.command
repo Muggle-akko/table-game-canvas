@@ -12,6 +12,7 @@ read "host_name?房主显示名（直接回车使用「房主A」）："
 host_name="${host_name:-房主A}"
 
 printf '\n选择这次铺上桌的资源包：\n'
+printf '  0) 继续最近一桌 · 保留手牌、牌序与原昵称\n'
 printf '  1) 标准扑克 · 54 张（默认）\n'
 printf '  2) UNO · 108 张\n'
 printf '  3) 月面哨站 · 示例资源包\n'
@@ -19,6 +20,7 @@ printf '  4) 自定义 JSON 路径\n\n'
 read "pack_choice?输入编号后回车："
 
 case "${pack_choice:-1}" in
+  0) pack_path="" ;;
   1) pack_path="./game-packs/standard-54.json" ;;
   2) pack_path="./game-packs/uno.json" ;;
   3) pack_path="./game-packs/moon-outpost.json" ;;
@@ -37,13 +39,16 @@ case "${pack_choice:-1}" in
     ;;
 esac
 
-if ! npm run validate:pack -- "$pack_path"; then
+if [[ "${pack_choice:-1}" != "0" ]] && ! npm run validate:pack -- "$pack_path"; then
   printf '\n游戏包没有通过校验，尚未启动房间。\n'
   read "?按回车关闭窗口…"
   exit 1
 fi
 
 room_arguments=(--name "$host_name" --pack "$pack_path")
+if [[ "${pack_choice:-1}" == "0" ]]; then
+  room_arguments=(--resume-latest)
+fi
 
 if [[ ! -x "$project_dir/.tools/cloudflared" ]]; then
   printf '\n第一次开房需要准备公网隧道工具。\n'
@@ -55,7 +60,7 @@ if [[ ! -x "$project_dir/.tools/cloudflared" ]]; then
 fi
 
 printf '\n正在铺桌。只有健康检查通过后才会显示邀请链接。\n'
-printf '保持这个窗口打开；关闭窗口就会结束房间。\n\n'
+printf '保持这个窗口打开以供朋友连接；关闭后可从自动存档继续。\n\n'
 
 npm run room -- "${room_arguments[@]}"
 exit_code=$?

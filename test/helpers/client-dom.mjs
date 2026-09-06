@@ -4,9 +4,11 @@ import vm from "node:vm";
 
 // An in-memory DOM double for production event wiring. It has no layout engine,
 // networking, or browser process; these tests do not replace visual browser QA.
-export async function loadClient({ width = 1440, height = 900, indexedDB, storage = new Map() } = {}) {
+export async function loadClient({ width = 1440, height = 900, indexedDB, storage = new Map(), url = "https://table.example/?preview=1", fetch: fetchImpl, EventSource } = {}) {
   let document, context;
   const listeners = new Map();
+  let timerId = 0, timerClock = 0;
+  const timers = new Map();
   const style = () => ({ setProperty(key, value) { this[key] = value; }, removeProperty(key) { delete this[key]; } });
   const toData = (key) => key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
   const split = (selector, delimiter) => {
@@ -151,24 +153,26 @@ export async function loadClient({ width = 1440, height = 900, indexedDB, storag
   document.getElementById("open-hand").rect = { left: width / 2 - 60, top: height - 88, width: 120, height: 40 };
   document.getElementById("hand-drawer").rect = { left: width / 2 - 340, top: height - 300, width: 680, height: 215 };
   const storageApi = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) };
-  const location = new URL("https://table.example/?preview=1"); location.assign = (url) => { location.href = url; };
+  const location = new URL(url); location.assign = (value) => { location.href = value; };
   const globals = {
-    document, URL, URLSearchParams, Blob, crypto: webcrypto, structuredClone, console, indexedDB,
+    document, URL, URLSearchParams, Blob, AbortController, EventSource, crypto: webcrypto, structuredClone, console, indexedDB,
     HTMLElement: Element, HTMLInputElement: Input, HTMLTextAreaElement: Textarea, HTMLSelectElement: Select,
     innerWidth: width, innerHeight: height, location, localStorage: storageApi, sessionStorage: storageApi,
-    performance, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
+    performance,
+    setTimeout: (callback, delay = 0) => { const id = ++timerId; timers.set(id, { callback, at: timerClock + delay }); return id; },
+    clearTimeout: (id) => timers.delete(id), setInterval: () => 1, clearInterval() {},
     requestAnimationFrame: (callback) => { callback(); return 1; },
     addEventListener: (type, callback) => { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(callback); },
-    fetch: () => { throw new Error("The offline client must not use the network"); },
-    navigator: { clipboard: { writeText: async () => {} } }, confirm: () => true, history: { replaceState() {} }
+    fetch: fetchImpl || (() => { throw new Error("The offline client must not use the network"); }),
+    navigator: { clipboard: { writeText: async () => {} } }, confirm: () => true, history: { replaceState(_state, _title, value) { location.href = String(value); } }
   };
   context = vm.createContext(globals); context.window = context;
   for (const match of html.matchAll(/<script\s+defer\s+src="\.\/([^"]+)"/g)) {
     const file = match[1];
     new vm.Script(await readFile(new URL(`../../public/${file}`, import.meta.url), "utf8"), { filename: file }).runInContext(context);
   }
-  vm.runInContext("globalThis.client = { app, elements, workspace, syncPreviewState, switchPreviewRole, selectResource, selectedResource, visibleStackForCard, activeDeck, runSelectionAction, sendCommand, fitAll, fitCamera, cancelDrag, nextOpenPublicCardPoint };", context);
-  async function settle() { for (let index = 0; index < 12; index++) await Promise.resolve(); }
+  vm.runInContext("globalThis.client = { app, elements, workspace, recovery, previewRecovery, syncPreviewState, switchPreviewRole, selectResource, selectedResource, visibleStackForCard, activeDeck, runSelectionAction, sendCommand, fitAll, fitCamera, cancelDrag, nextOpenPublicCardPoint };", context);
+  async function settle() { for (let index = 0; index < 40; index++) await Promise.resolve(); }
   async function dispatch(target, type, options = {}) {
     let stopped = false;
     const event = { target, type, button: 0, pointerId: 1, pointerType: "mouse", clientX: 0, clientY: 0, key: "", shiftKey: false, ctrlKey: false, metaKey: false, altKey: false,
@@ -179,5 +183,14 @@ export async function loadClient({ width = 1440, height = 900, indexedDB, storag
     await settle(); return event;
   }
   await settle();
-  return { ...context.client, context, document, dispatch, settle, $: (id) => document.getElementById(id), vm: (source) => vm.runInContext(source, context) };
+  async function advanceTimers(ms) {
+    const until = timerClock + ms;
+    for (let count = 0; count < 1000; count++) {
+      const next = [...timers].filter(([, timer]) => timer.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      const [id, timer] = next; timerClock = timer.at; timers.delete(id); timer.callback(); await settle();
+    }
+    timerClock = until;
+  }
+  return { ...context.client, context, document, dispatch, settle, advanceTimers, $: (id) => document.getElementById(id), vm: (source) => vm.runInContext(source, context) };
 }

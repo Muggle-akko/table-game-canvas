@@ -7,6 +7,7 @@ import { randomInt, randomUUID } from "node:crypto";
 import { RoomError, createRoom } from "./room-engine.mjs";
 import { loadRoomAsset, validatePackAssets } from "./room-assets.mjs";
 import { createRoomTransport } from "./room-transport.mjs";
+import { createRoomPersistence, latestRoomPath, readRoomCheckpoint } from "./room-persistence.mjs";
 import { findCloudflared, startQuickTunnel } from "./tunnel.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
@@ -32,6 +33,9 @@ export function parseArguments(argv) {
     port: Number(process.env.PORT) || 4173,
     hostName: "玩家1",
     appUrl: process.env.PUBLIC_APP_URL || "",
+    resumePath: null,
+    resumeLatest: false,
+    storageDirectory: resolve(root, ".parlor/rooms"),
     packPath: resolve(root, process.env.GAME_PACK || defaultPackPath)
   };
 
@@ -42,6 +46,12 @@ export function parseArguments(argv) {
     else if (argument === "--port") options.port = Number(argv[++index]);
     else if (argument === "--name") options.hostName = argv[++index] || options.hostName;
     else if (argument === "--app-url") options.appUrl = argv[++index] || "";
+    else if (argument === "--resume-latest") options.resumeLatest = true;
+    else if (argument === "--resume") {
+      const path = argv[++index];
+      if (!path || path.startsWith("--")) throw new Error("--resume 后需要填写房间续局文件路径。");
+      options.resumePath = resolve(root, path);
+    }
     else if (argument === "--pack") {
       const requestedPath = argv[++index];
       if (!requestedPath) throw new Error("--pack 后需要填写 JSON 游戏包路径。");
@@ -53,6 +63,7 @@ export function parseArguments(argv) {
   if (!Number.isInteger(options.port) || options.port < 1024 || options.port > 65535) {
     throw new Error("端口必须是 1024–65535 之间的整数。");
   }
+  if (options.resumePath && options.resumeLatest) throw new Error("--resume 和 --resume-latest 只能选择一个。");
 
   if (options.appUrl) {
     const parsed = new URL(options.appUrl);
@@ -155,7 +166,7 @@ export function describeListenError(error, port) {
   return error;
 }
 
-export async function createRoomServer(room, port, { assetDirectory = null, packLibrary = [] } = {}) {
+export async function createRoomServer(room, port, { assetDirectory = null, packLibrary = [], persistence = null } = {}) {
   const packsById = new Map(packLibrary.map((entry) => [entry.pack.id, entry]));
   room.packOptions = packsById.size > 0
     ? [...packsById.values()].map((entry) => ({
@@ -165,6 +176,7 @@ export async function createRoomServer(room, port, { assetDirectory = null, pack
       }))
     : [{ id: room.pack.id, name: room.pack.name, cardCount: room.cards.size }];
   const transport = createRoomTransport(room, {
+    persistence,
     loadAsset: assetDirectory || packsById.size > 0
       ? (reference, packId = room.pack.id) => {
           const entry = packsById.get(packId);
@@ -211,9 +223,13 @@ export async function createRoomServer(room, port, { assetDirectory = null, pack
   return {
     httpServer,
     transport,
-    close() {
+    async close() {
+      await transport.flush();
+      await persistence?.flush().catch(() => {});
       transport.close();
-      return new Promise((resolvePromise) => httpServer.close(resolvePromise));
+      httpServer.closeIdleConnections?.();
+      await new Promise((resolvePromise) => httpServer.close(resolvePromise));
+      await persistence?.close?.();
     }
   };
 }
@@ -231,7 +247,8 @@ async function main() {
   } catch (error) {
     throw new Error(`无法读取游戏包 ${options.packPath}：${error.message}`);
   }
-  const room = createRoom({
+  const resumePath = options.resumePath || (options.resumeLatest ? await latestRoomPath(options.storageDirectory) : null);
+  const room = resumePath ? await readRoomCheckpoint(resumePath) : createRoom({
     code: createRoomCode(),
     hostName: options.hostName,
     hostSecret: randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", ""),
@@ -240,7 +257,7 @@ async function main() {
   const assetDirectory = dirname(options.packPath);
   await validatePackAssets(pack, assetDirectory);
   const packLibrary = [{ pack, assetDirectory }];
-  for (const packPath of [defaultPackPath, unoPackPath, resolve(root, "game-packs/moon-outpost.json")]) {
+  for (const packPath of [defaultPackPath, unoPackPath, resolve(root, "game-packs/moon-outpost.json"), resolve(root, "game-packs/holdem-52.json")]) {
     if (resolve(packPath) === resolve(options.packPath)) continue;
     const builtinPack = JSON.parse(await readFile(packPath, "utf8"));
     const builtinAssetDirectory = dirname(packPath);
@@ -249,6 +266,7 @@ async function main() {
       packLibrary.push({ pack: builtinPack, assetDirectory: builtinAssetDirectory });
     }
   }
+  const persistence = await createRoomPersistence(room, { directory: options.storageDirectory });
 
   let server = null;
   let tunnel = null;
@@ -259,11 +277,16 @@ async function main() {
     shuttingDown = true;
     tunnel?.stop();
     if (server) await server.close();
+    else await persistence.close();
     process.exitCode = exitCode;
   };
 
   try {
-    server = await createRoomServer(room, options.port, { assetDirectory, packLibrary });
+    await persistence.save();
+    server = await createRoomServer(room, options.port, { assetDirectory: room.pack.id === pack.id ? assetDirectory : null, packLibrary, persistence });
+    console.log(resumePath ? "已恢复上次对局，原席位和手牌已保留。" : "这桌已启用自动存档。");
+    console.log(`房主续局文件：${persistence.path}`);
+    console.log("下次运行 npm run room -- --resume-latest 可续局；公网地址可能变化，请重新分享链接。\n");
     const localBaseUrl = `http://127.0.0.1:${options.port}/`;
 
     if (options.local) {

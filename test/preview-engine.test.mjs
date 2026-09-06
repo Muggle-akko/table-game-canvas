@@ -154,7 +154,7 @@ test("offline host can replace the live table with UNO while guests stay seated"
     packId: "uno"
   }, { now: 7_500_100 });
   assert.equal(state.room.pack.id, "uno");
-  assert.equal(state.room.packOptions.length, 3);
+  assert.equal(state.room.packOptions.length, 4);
   assert.equal(state.players.length, 2);
   assert.equal(state.deck.count, 108);
   assert.equal(state.cards.length, 0);

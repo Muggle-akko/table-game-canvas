@@ -105,7 +105,9 @@ const elements = {
 const query = new URLSearchParams(window.location.search);
 const roomCode = String(query.get("room") || "").trim().toUpperCase();
 const hostSecret = query.get("host") || "";
+let personalSeatKey = query.get("seat") || "";
 const previewMode = query.get("preview") === "1";
+const previewPackId = window.ParlorPacks.some((pack) => pack.id === query.get("pack")) ? query.get("pack") : "standard-54";
 let freshSession = query.get("fresh") === "1";
 let autoJoinName = Array.from(String(query.get("autojoin") || "")).slice(0, 20).join("");
 
@@ -135,6 +137,7 @@ const app = {
   camera: { x: 0, y: 0, scale: 0.68 },
   pan: null,
   drag: null,
+  dragHeartbeat: null,
   tableTouches: new Map(),
   touchNavigation: null,
   handTouch: null,
@@ -166,10 +169,13 @@ const app = {
 };
 
 let workspace;
+let feedback;
+let recovery;
+let previewRecovery;
 let stackState = null;
 let stackIndex = new Map();
 
-const CURSOR_SEND_INTERVAL = 80;
+const CURSOR_SEND_INTERVAL = 100;
 const CURSOR_REQUEST_TIMEOUT = 1800;
 
 function phIcon(name, className = "") {
@@ -326,7 +332,7 @@ function hideHistory({ returnFocus = true } = {}) {
   elements.historyPanel.classList.remove("is-open");
   elements.historyPanel.setAttribute("aria-hidden", "true");
   elements.openHistory.setAttribute("aria-expanded", "false");
-  if (returnFocus && wasOpen) elements.openTools.focus();
+  if (returnFocus && wasOpen) elements.openHistory.focus();
 }
 
 function hideSidePanels({ returnFocus = false } = {}) {
@@ -391,14 +397,19 @@ function showRoom() {
   showOnly(elements.room);
 }
 
-function createPreviewModel() {
+function previewShareUrl() {
   const previewUrl = new URL(window.location.href);
+  previewUrl.search = ""; previewUrl.hash = "";
   previewUrl.searchParams.set("preview", "1");
-  previewUrl.searchParams.delete("as");
+  previewUrl.searchParams.set("pack", previewPackId);
+  return previewUrl.toString();
+}
+
+function createPreviewModel() {
   if (!window.ParlorPreview) throw new Error("离线试玩核心没有加载成功，请刷新页面。");
   const model = window.ParlorPreview.createModel({
-    shareUrl: previewUrl.toString(),
-    packId: query.get("pack") || "standard-54"
+    shareUrl: previewShareUrl(),
+    packId: previewPackId
   });
   for (const [resourceId, x, y] of [["die-d6", 1080, 590], ["note", 1170, 360]]) {
     window.ParlorPreview.applyCommand(model, "player_a", { type: "spawn-resource", resourceId, x, y });
@@ -430,10 +441,11 @@ function seedPreviewCursor() {
 
 function updatePreviewRoleControl() {
   if (!previewMode) return;
-  const nextIsGuest = app.state.you.role === "host";
+  const players = app.state.players, next = players[(players.findIndex((player) => player.id === app.state.you.id) + 1) % players.length];
   elements.previewRole.classList.remove("is-hidden");
-  elements.previewRole.querySelector("b").textContent = nextIsGuest ? "切到客人视角" : "切到房主视角";
-  elements.previewRole.setAttribute("aria-label", nextIsGuest ? "切换到客人B视角" : "切换到房主A视角");
+  elements.previewRole.disabled = players.length < 2;
+  elements.previewRole.querySelector("b").textContent = `切到${next.name}视角`;
+  elements.previewRole.setAttribute("aria-label", `切换到${next.name}视角`);
 }
 
 function syncPreviewState(viewerId = app.state?.you?.id || "player_a") {
@@ -441,12 +453,14 @@ function syncPreviewState(viewerId = app.state?.you?.id || "player_a") {
   app.player = app.state.you;
   updatePreviewRoleControl();
   renderRoom();
+  for (const signal of app.previewModel.engineRoom.cardRequests.values()) if (signal.expiresAt > Date.now()) feedback?.receiveRequest(signal);
 }
 
 function switchPreviewRole() {
   if (!previewMode || !app.state) return;
   app.selectionIntent++;
-  const nextViewerId = app.state.you.id === "player_a" ? "player_b" : "player_a";
+  const players = app.state.players;
+  const nextViewerId = players[(players.findIndex((player) => player.id === app.state.you.id) + 1) % players.length].id;
   app.selection = null;
   app.selectionTransferOpen = false;
   app.turnInitialized = false;
@@ -456,9 +470,13 @@ function switchPreviewRole() {
   toast(`已切换到 ${app.state.you.name} 视角；私有牌面已重新过滤。`);
 }
 
-function startPreview() {
-  app.previewModel = createPreviewModel();
-  const viewerId = query.get("as") === "guest" ? "player_b" : "player_a";
+async function startPreview() {
+  const saved = await previewRecovery.load();
+  app.previewModel = saved?.model || createPreviewModel();
+  const players = [...app.previewModel.engineRoom.players.values()];
+  const requested = query.has("as") ? players.find((player) => player.role === (query.get("as") === "guest" ? "guest" : "host"))?.id : saved?.viewerId;
+  const viewerId = players.some((player) => player.id === requested) ? requested : players.find((player) => player.role === "host").id;
+  if (saved?.camera) { app.camera = saved.camera; app.cameraInitialized = true; app.cameraTouched = true; applyCamera(); }
   app.state = projectPreviewModel(viewerId);
   app.player = app.state.you;
   app.sessionToken = "preview-session";
@@ -480,7 +498,30 @@ function startPreview() {
   renderRoom();
   seedPreviewCursor();
   renderCursors();
-  toast("桌面准备好了。打开资源库，拿点东西上桌吧。");
+  await previewRecovery.activate(Boolean(saved));
+  toast(saved ? "已回到上次的试玩，手牌与牌局进度都在。" : "桌面准备好了。打开资源库，拿点东西上桌吧。");
+}
+
+async function restartPreview() {
+  cancelHandInteraction(); cancelTableTouches(); cancelDrag(); cancelPan();
+  app.selection = null; app.selectionIntent++; app.selectionTransferOpen = false;
+  app.cardFaceStates.clear(); app.pendingFlips.clear(); app.remoteDrags.clear();
+  app.turnInitialized = false; app.lastDieRollId = 0;
+  app.cameraInitialized = false; app.cameraTouched = false;
+  app.previewModel = createPreviewModel();
+  syncPreviewState("player_a"); seedPreviewCursor(); renderCursors();
+  await previewRecovery.activate(false);
+}
+
+async function openSavedPreview(record) {
+  if (!previewMode || app.pendingCommands.size) return false;
+  if (!/^preview:[\w-]{1,80}$/.test(record.id)) throw new Error("这份试玩的编号无效。");
+  if (!await previewRecovery.flush()) return false;
+  const url = new URL(window.location.href); url.search = ""; url.hash = "";
+  url.searchParams.set("preview", "1"); url.searchParams.set("pack", record.packId || "standard-54");
+  url.searchParams.set("local", record.id.slice("preview:".length));
+  window.location.assign(url.toString());
+  return true;
 }
 
 function toast(message, type = "info") {
@@ -542,7 +583,7 @@ async function probeRoom() {
   return app.summary;
 }
 
-async function joinRoom({ displayName = "", resumeToken = "", secret = "" } = {}) {
+async function joinRoom({ displayName = "", resumeToken = "", secret = "", seatKey = "" } = {}) {
   const payload = await fetchJson(apiUrl("/api/join"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -550,6 +591,7 @@ async function joinRoom({ displayName = "", resumeToken = "", secret = "" } = {}
       roomCode,
       displayName,
       resumeToken,
+      seatKey,
       hostSecret: secret
     })
   });
@@ -557,15 +599,18 @@ async function joinRoom({ displayName = "", resumeToken = "", secret = "" } = {}
   app.sessionToken = payload.sessionToken;
   app.player = payload.player;
   storeSession(payload.sessionToken);
+  recovery?.joined(payload);
 
-  if (secret || freshSession || autoJoinName) {
+  if (secret || seatKey || freshSession || autoJoinName) {
     const cleanUrl = new URL(window.location.href);
     cleanUrl.searchParams.delete("host");
+    cleanUrl.searchParams.delete("seat");
     cleanUrl.searchParams.delete("fresh");
     cleanUrl.searchParams.delete("autojoin");
     window.history.replaceState({}, "", cleanUrl);
     freshSession = false;
     autoJoinName = "";
+    personalSeatKey = "";
   }
 
   showRoom();
@@ -577,7 +622,7 @@ async function initialize() {
   app.terminalOffline = false;
   showOnly(elements.boot);
   if (previewMode) {
-    startPreview();
+    await startPreview();
     return;
   }
   if (!roomCode) {
@@ -589,6 +634,11 @@ async function initialize() {
 
     if (hostSecret) {
       await joinRoom({ secret: hostSecret });
+      return;
+    }
+    if (personalSeatKey) {
+      try { await joinRoom({ seatKey: window.ParlorRecovery.parseSeatKey(personalSeatKey) }); }
+      catch (error) { showJoin(); elements.joinError.textContent = error.message; }
       return;
     }
 
@@ -615,8 +665,34 @@ async function initialize() {
       }
     }
 
+    if (!freshSession) {
+      const saved = await recovery.preferredSeat(app.summary.gameId);
+      if (saved) {
+        try { await joinRoom({ seatKey: saved.key }); return; }
+        catch (error) { if (![401, 403, 404].includes(error.status)) throw error; }
+      }
+      const choices = await recovery.savedSeats(app.summary.gameId);
+      const nodes = choices.map((record) => {
+        const button = document.createElement("button"); button.type = "button";
+        button.textContent = `回到 ${record.name}${record.role === "host" ? "（房主）" : ""}`;
+        button.addEventListener("click", async () => { button.disabled = true; try { await joinRoom({ seatKey: record.key }); } catch (error) { elements.joinError.textContent = error.message; } finally { button.disabled = false; } });
+        return button;
+      });
+      $("#saved-seat-choices").replaceChildren(...nodes);
+    }
+
     showJoin();
   } catch (error) {
+    const cached = !freshSession && !hostSecret && !personalSeatKey ? await recovery.cachedSeat() : null;
+    if (cached) {
+      app.state = cached.state; app.player = cached.state.you; app.sessionToken = cached.sessionToken;
+      app.connectionOpen = false;
+      if (cached.camera && [cached.camera.x, cached.camera.y, cached.camera.scale].every(Number.isFinite)) {
+        app.camera = cached.camera; app.cameraInitialized = true; app.cameraTouched = true;
+      }
+      showRoom(); renderRoom(); applyCamera(); connectEvents(); setConnectionState("offline");
+      return;
+    }
     showOffline(error.name === "AbortError"
       ? "联系房主超时。请确认房主的 Node 和公网隧道仍在运行。"
       : error.message);
@@ -630,6 +706,19 @@ function eventUrl() {
   return url.toString();
 }
 
+function receiveRoomState(message, { initial = false } = {}) {
+  if (!message || message.type !== "room-state" || (app.player && message.you.id !== app.player.id)) return;
+  if (!initial && app.state && message.revision < app.state.revision) return;
+  app.state = message; app.player = message.you;
+  showRoom(); renderRoom();
+}
+
+async function fetchCurrentState() {
+  const url = new URL(apiUrl("/api/state"));
+  url.searchParams.set("room", roomCode); url.searchParams.set("session", app.sessionToken);
+  return fetchJson(url.toString());
+}
+
 function setConnectionState(status) {
   elements.connectionDot.classList.remove("is-online", "is-reconnecting", "is-offline");
   elements.reconnectBanner.classList.remove("is-offline");
@@ -638,15 +727,20 @@ function setConnectionState(status) {
     elements.connectionDot.classList.add("is-online");
     label = status === "demo" ? "离线试玩" : "房主在线";
     elements.reconnectBanner.classList.add("is-hidden");
+    if (app.state?.persistence?.error) {
+      label = "已连接，自动存档暂未完成";
+      elements.reconnectLabel.textContent = app.state.persistence.error;
+      elements.reconnectBanner.classList.remove("is-hidden");
+    }
   } else if (status === "reconnecting") {
     elements.connectionDot.classList.add("is-reconnecting");
     label = "网络有波动，正在恢复同步";
-    elements.reconnectLabel.textContent = "网络有波动，正在恢复同步…";
+    elements.reconnectLabel.textContent = recovery?.pendingCount ? `正在核对 ${recovery.pendingCount} 项操作，请稍候…` : "网络有波动，正在恢复同步…";
     elements.reconnectBanner.classList.remove("is-hidden");
   } else if (status === "offline") {
     elements.connectionDot.classList.add("is-offline");
     elements.reconnectBanner.classList.add("is-offline");
-    elements.reconnectLabel.textContent = "暂时没有连上房间，仍在尝试恢复…";
+    elements.reconnectLabel.textContent = "连接中断，桌面已保留。正在重连；房主重开后请使用新邀请链接。";
     label = "暂时没有连上房间";
     elements.reconnectBanner.classList.remove("is-hidden");
   }
@@ -658,6 +752,7 @@ function connectEvents() {
   clearTimeout(app.reconnectTimer);
   app.closingStream = false;
   app.eventSource?.close();
+  app.awaitingInitialState = true;
   setConnectionState("connecting");
 
   const source = new EventSource(eventUrl());
@@ -665,10 +760,7 @@ function connectEvents() {
 
   source.addEventListener("open", () => {
     if (app.eventSource !== source) return;
-    app.connectionOpen = true;
-    app.reconnectAttempts = 0;
-    setConnectionState("online");
-    renderTools();
+    setConnectionState(app.state ? "reconnecting" : "connecting");
   });
 
   source.addEventListener("message", (event) => {
@@ -681,12 +773,12 @@ function connectEvents() {
     }
 
     if (message.type === "room-state") {
-      if (!app.state || message.revision > app.state.revision) {
-        app.state = message;
-        app.player = message.you;
-        showRoom();
-        renderRoom();
-      }
+      const initial = app.awaitingInitialState;
+      app.connectionOpen = true; app.reconnectAttempts = 0;
+      receiveRoomState(message, { initial });
+      app.awaitingInitialState = false;
+      setConnectionState("online");
+      if (initial) void recovery.restorePending();
       return;
     }
 
@@ -695,6 +787,7 @@ function connectEvents() {
       if (message.drag) {
         app.remoteDrags.set(message.playerId, {
           ...message.drag,
+          ...(message.drag.sourceType === "stack" ? { cardIds: visibleStackForCard(message.drag.resourceId).map((card) => card.id) } : {}),
           playerId: message.playerId,
           name: message.name,
           color: message.color,
@@ -716,8 +809,13 @@ function connectEvents() {
       return;
     }
 
+    if (message.type === "card-request" || message.type === "card-request-end") {
+      feedback?.receiveRequest(message);
+      return;
+    }
+
     if (message.type === "drag-end") {
-      app.remoteDrags.delete(message.playerId);
+      if (!message.dragId || app.remoteDrags.get(message.playerId)?.dragId === message.dragId) app.remoteDrags.delete(message.playerId);
       renderRemoteDrags();
       return;
     }
@@ -744,12 +842,17 @@ function connectEvents() {
 function scheduleReconnect(source) {
   if (app.terminalOffline || !app.sessionToken) return;
   app.reconnectAttempts += 1;
-  const delay = Math.min(4200, 500 * 2 ** Math.min(app.reconnectAttempts, 3));
+  const delay = Math.min(15000, 600 * 2 ** Math.min(app.reconnectAttempts, 5));
   clearTimeout(app.reconnectTimer);
   app.reconnectTimer = window.setTimeout(async () => {
     try {
       await probeRoom();
       if (app.eventSource !== source) return;
+      const state = await fetchCurrentState();
+      if (app.eventSource !== source) return;
+      app.connectionOpen = true;
+      receiveRoomState(state, { initial: app.awaitingInitialState }); app.awaitingInitialState = false;
+      void recovery.restorePending();
       if (source.readyState === EventSource.OPEN) {
         app.connectionOpen = true;
         app.reconnectAttempts = 0;
@@ -761,15 +864,20 @@ function scheduleReconnect(source) {
       } else {
         scheduleReconnect(source);
       }
-    } catch {
-      if (app.reconnectAttempts >= 4) {
-        source.close();
-        app.connectionOpen = false;
-        setConnectionState("offline");
-        showOffline("暂时没有连上房间。可能是网络或公网隧道波动；请先重试，若持续失败再确认房主终端仍在运行。");
-      } else {
-        scheduleReconnect(source);
+    } catch (error) {
+      if (app.eventSource !== source) return;
+      if (error.status === 401) {
+        const seat = await recovery.preferredSeat(app.state?.room.gameId || app.summary?.gameId);
+        if (seat) {
+          try { await joinRoom({ seatKey: seat.key }); return; }
+          catch (resumeError) {
+            if (resumeError.status === 403) { app.closingStream = true; source.close(); app.connectionOpen = false; clearStoredSession(); showJoin(); elements.joinError.textContent = "原席位已被释放。请确认后重新入座，或粘贴新的续局口令。"; return; }
+          }
+        }
       }
+      app.connectionOpen = false; cancelDrag(); clearCursorQueue();
+      setConnectionState("offline"); renderTools(); workspace?.render();
+      scheduleReconnect(source);
     }
   }, delay);
 }
@@ -783,32 +891,7 @@ function updateIdentity(player) {
 }
 
 function calculateHandLayouts(players) {
-  const sorted = [...players].sort((left, right) => left.seatIndex - right.seatIndex);
-  const layouts = new Map();
-  const startX = 205;
-  const totalWidth = 1390;
-  const gap = 18;
-
-  const placeRow = (rowPlayers, y, height) => {
-    if (rowPlayers.length === 0) return;
-    const width = (totalWidth - gap * (rowPlayers.length - 1)) / rowPlayers.length;
-    rowPlayers.forEach((player, index) => {
-      layouts.set(player.id, {
-        x: startX + index * (width + gap),
-        y,
-        width,
-        height
-      });
-    });
-  };
-
-  if (sorted.length <= 4) {
-    placeRow(sorted, 825, 225);
-  } else {
-    placeRow(sorted.slice(0, 4), 825, 225);
-    placeRow(sorted.slice(4), 25, 155);
-  }
-  return layouts;
+  return new Map(players.map((player) => [player.id, player.privateZone || window.ParlorEngine.privateZoneForSeat(player.seatIndex)]));
 }
 
 function makePlayerRow(player, you) {
@@ -830,7 +913,7 @@ function makePlayerRow(player, you) {
   const name = document.createElement("strong");
   name.textContent = player.id === you.id ? `${player.name}（你）` : player.name;
   const role = document.createElement("small");
-  role.textContent = `${player.role === "host" ? "房主 · " : ""}${player.status || "在桌边"}`;
+  role.textContent = player.role === "host" ? "房主" : "同桌玩家";
   meta.append(name, role);
 
   const status = document.createElement("span");
@@ -1056,7 +1139,16 @@ function renderSelectionDock() {
   let allowTransfer = false;
   elements.selectionDock.classList.remove("is-hidden");
 
-  if (resource.type === "deck") {
+  if (resource.value.managedBy === "holdem" || resource.value.id === app.state.holdem?.matId) {
+    elements.selectionMeta.textContent = "德州助手";
+    elements.selectionTitle.textContent = resource.value.face?.label || resource.value.label || "本手底牌";
+    actions.push(makeSelectionAction("open-holdem", "cards-three", "继续德州", { accent: true }));
+    if (resource.type === "card" && resource.value.zone === "hand" && resource.value.ownerId === app.state.you.id) {
+      secondaryActions.push(makeSelectionAction("rotate-left", "arrow-counter-clockwise", "左转", { disabled: !connected }));
+      secondaryActions.push(makeSelectionAction("rotate-right", "arrow-clockwise", "右转", { disabled: !connected }));
+      secondaryActions.push(makeSelectionAction("arrange-hand", "stack", "整理私人区", { disabled: !connected }));
+    }
+  } else if (resource.type === "deck") {
     elements.selectionMeta.textContent = `${resource.value.count} 张`;
     elements.selectionTitle.textContent = resource.value.label;
     actions.push(makeSelectionAction("draw", "cards-three", "抽一张", { accent: true, disabled: !connected || !resource.value.canDraw }));
@@ -1091,11 +1183,18 @@ function renderSelectionDock() {
       actions.push(makeSelectionAction("draw-stack", "cards-three", "抽一张", { accent: true, disabled: !canEdit || stackLocked }));
       actions.push(makeSelectionAction("shuffle-stack", "shuffle", "洗牌", { disabled: !canEdit || stackLocked }));
       actions.push(makeSelectionAction("spread-stack", "arrows-out-line-horizontal", "展开", { disabled: !canEdit || stackLocked }));
+    } else if (card.zone === "hand" && card.ownerId !== app.state.you.id) {
+      elements.selectionMeta.textContent = "朋友的私人区";
+      elements.selectionTitle.textContent = "背面朝上的牌";
+      actions.push(makeSelectionAction("signal-card", "cursor-click", "标记这张", { accent: true, disabled: !connected }));
     } else if (card.zone === "hand") {
       elements.selectionMeta.textContent = card.ownerId === app.state.you.id ? "手牌" : "私有";
       elements.selectionTitle.textContent = card.face?.label || "背面朝上的牌";
       actions.push(makeSelectionAction("reveal-card", "eye", "正面公开", { accent: true, disabled: !canEdit }));
       actions.push(makeSelectionAction("cover-card", "eye-slash", "背面盖放", { disabled: !canEdit }));
+      secondaryActions.push(makeSelectionAction("rotate-left", "arrow-counter-clockwise", "左转", { disabled: !canEdit }));
+      secondaryActions.push(makeSelectionAction("rotate-right", "arrow-clockwise", "右转", { disabled: !canEdit }));
+      secondaryActions.push(makeSelectionAction("arrange-hand", "stack", "整理私人区", { disabled: !connected }));
       allowTransfer = canEdit && canSendSelectedCard(card) && app.state.players.length > 1;
     } else {
       elements.selectionMeta.textContent = card.locked ? "已锁定" : card.faceUp === false ? "背面" : "";
@@ -1116,8 +1215,7 @@ function renderSelectionDock() {
     app.selectionTransferOpen = false;
   }
   const more = workspace.extraActions(resource, secondaryActions);
-  if (wasOpen) more.setAttribute("open", "");
-  actions.push(more);
+  if (more) { if (wasOpen) more.setAttribute("open", ""); actions.push(more); }
   elements.selectionActions.replaceChildren(...actions);
   elements.selectionDock.dataset.resourceKey = resourceKey;
   renderSelectionTransfer(resource, sameSelection);
@@ -1131,6 +1229,8 @@ function renderSelectionDock() {
 function runSelectionAction(action) {
   const resource = selectedResource();
   if (!resource || !app.state) return;
+  if (action === "signal-card") { void feedback.requestCard(resource.value); return; }
+  if (action === "arrange-hand") { void sendCommand({ type: "arrange-hand" }); return; }
   elements.selectionActions.querySelector(".selection-more")?.removeAttribute("open");
   if (workspace.handleAction(action, resource)) return;
   if (action === "toggle-transfer") {
@@ -1170,7 +1270,8 @@ function runSelectionAction(action) {
     sendCommand({
       type: "move-card",
       cardId: card.id,
-      target: "public",
+      target: card.zone === "hand" ? "hand" : "public",
+      ...(card.zone === "hand" ? { ownerId: card.ownerId } : {}),
       x: card.x,
       y: card.y,
       rotation: Math.max(-180, Math.min(180, (Number(card.rotation) || 0) + delta)),
@@ -1216,7 +1317,7 @@ function renderHandZones() {
     label.className = "hand-zone__label";
     const marker = document.createElement("i");
     const name = document.createElement("b");
-    name.textContent = player.id === you.id ? "我的手牌" : player.name;
+    name.textContent = player.id === you.id ? "我的私人区" : `${player.name}的私人区`;
     label.append(marker, name);
     if (isActive) {
       const turn = document.createElement("em");
@@ -1298,6 +1399,8 @@ function appendCardBack(container, source, deckId = "main") {
 function appendCardFace(container, face, cardId) {
   const front = document.createElement("div");
   front.className = `card-face${face.tone === "red" ? " is-red" : ""}`;
+  const symbolCard = !face.hasImage && ["red", "green", "blue", "yellow", "wild"].includes(face.suit) && Boolean(face.color);
+  if (symbolCard) front.classList.add("is-symbol-card");
   if (/^#[0-9a-f]{6}$/i.test(face.color || "")) {
     front.classList.add("has-custom-color");
     front.style.setProperty("--card-face-color", face.color);
@@ -1309,20 +1412,23 @@ function appendCardFace(container, face, cardId) {
     const corner = document.createElement("span");
     corner.className = `card-corner${bottom ? " card-corner--bottom" : ""}`;
     const rank = document.createElement("b");
-    rank.textContent = face.rank;
+    rank.textContent = symbolCard ? ({ SKIP: "⊘", REV: "⇄", WILD: "◈" }[face.rank] || face.rank) : face.rank;
     const suit = document.createElement("small");
     suit.textContent = face.symbol;
-    corner.append(rank, suit);
+    corner.append(rank);
+    if (!symbolCard) corner.append(suit);
     return corner;
   };
 
   const symbol = document.createElement("span");
   symbol.className = "card-symbol";
-  symbol.textContent = face.symbol;
+  symbol.textContent = symbolCard && face.rank === "WILD" ? "◈" : face.symbol;
+  if (symbolCard && face.suit === "wild") front.classList.add("is-wild");
   const caption = document.createElement("span");
   caption.className = "card-caption";
   caption.textContent = face.label;
-  front.append(makeCorner(), symbol, caption, makeCorner(true));
+  front.append(makeCorner(), symbol, makeCorner(true));
+  if (!symbolCard) front.append(caption);
   container.append(front);
 }
 
@@ -1489,7 +1595,7 @@ function renderCards() {
   for (const card of app.state.cards) {
     currentIds.add(card.id);
     let position;
-    if (card.zone === "public") {
+    if (card.zone === "public" || Number.isFinite(card.x) && Number.isFinite(card.y)) {
       position = { x: card.x, y: card.y, rotation: card.rotation, z: card.z };
     } else {
       const group = groups.get(card.ownerId) || [];
@@ -1655,29 +1761,7 @@ function relativeTime(timestamp) {
 }
 
 function renderActivity() {
-  if (app.state.history.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "empty-activity";
-    empty.textContent = "牌桌刚刚铺好。";
-    elements.activityList.replaceChildren(empty);
-    return;
-  }
-
-  const items = [...app.state.history].reverse().map((entry) => {
-    const item = document.createElement("article");
-    item.className = "activity-item";
-    item.style.setProperty("--activity-color", playerColor(entry.actorId));
-    const text = document.createElement("p");
-    const actor = document.createElement("strong");
-    actor.textContent = entry.actorName;
-    text.append(actor, document.createTextNode(` ${entry.label}`));
-    const time = document.createElement("time");
-    time.dateTime = new Date(entry.at).toISOString();
-    time.textContent = relativeTime(entry.at);
-    item.append(text, time);
-    return item;
-  });
-  elements.activityList.replaceChildren(...items);
+  feedback?.renderHistory();
 }
 
 function renderPackLibrary() {
@@ -1693,33 +1777,39 @@ function renderTools() {
   const pending = (type) => app.pendingCommands.has(type);
   const deck = activeDeck();
   const maximumDeal = Number(elements.dealCount.dataset.maximum) || 0;
+  const poker = app.state.holdem, pokerDeck = Boolean(poker && deck.id === poker.deckId);
   elements.rollDie.disabled = !connected || pending("roll-die");
   elements.decrementCounter.disabled = !connected || pending("adjust-counter") || counter.value <= counter.min;
   elements.incrementCounter.disabled = !connected || pending("adjust-counter") || counter.value >= counter.max;
-  elements.turnPlayerSelect.disabled = !connected || !isHost || pending("set-turn");
-  elements.randomTurn.disabled = !connected || !isHost || pending("random-turn");
-  elements.nextTurn.disabled = !connected || !isHost || pending("advance-turn");
+  elements.turnPlayerSelect.disabled = !connected || !isHost || Boolean(poker) || pending("set-turn");
+  elements.randomTurn.disabled = !connected || !isHost || Boolean(poker) || pending("random-turn");
+  elements.nextTurn.disabled = !connected || !isHost || Boolean(poker) || pending("advance-turn");
   elements.undoTable.disabled = !connected || !isHost || !app.state.canUndo || pending("undo");
   elements.drawCard.disabled = !connected || !deck.canDraw || pending("draw");
-  elements.dealCount.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each");
-  elements.dealCards.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each");
-  elements.shuffleDeck.disabled = !connected || deck.count < 2 || pending("shuffle");
+  elements.dealCount.disabled = !connected || !isHost || pokerDeck || maximumDeal < 1 || pending("deal-each");
+  elements.dealCards.disabled = !connected || !isHost || pokerDeck || maximumDeal < 1 || pending("deal-each");
+  elements.shuffleDeck.disabled = !connected || pokerDeck || deck.count < 2 || pending("shuffle");
   elements.quickUndo.disabled = !connected || !isHost || !app.state.canUndo || pending("undo");
   elements.quickUndo.title = isHost ? "撤销上一步 · U" : "由房主撤销操作";
   elements.shuffleDeck.querySelector("strong").textContent = "洗选中牌盒";
   elements.drawCard.title = `从「${deck.label || "起始牌盒"}」抽牌`;
   const publicCardCount = app.state.cards.filter((card) => card.zone === "public").length;
-  elements.tidyPublic.disabled = !connected || !isHost || publicCardCount < 1 || pending("tidy-public");
-  elements.collectPublic.disabled = !connected || !isHost || publicCardCount < 1 || pending("collect-public");
-  elements.resetTable.disabled = !connected || !isHost || pending("reset");
+  elements.tidyPublic.disabled = !connected || !isHost || Boolean(poker) || publicCardCount < 1 || pending("tidy-public");
+  elements.collectPublic.disabled = !connected || !isHost || Boolean(poker) || publicCardCount < 1 || pending("collect-public");
+  elements.resetTable.disabled = !connected || !isHost || Boolean(poker) || pending("reset");
+  for (const control of [elements.turnPlayerSelect, elements.randomTurn, elements.nextTurn, elements.tidyPublic, elements.collectPublic, elements.resetTable]) {
+    control.title = poker ? "德州助手正在管理牌局，请在德州面板继续操作。" : "";
+  }
   elements.pingLocation.disabled = !connected;
   elements.offlineSeatCount.textContent = `${offlineGuests.length} 离线`;
   elements.offlineSeatCount.classList.toggle("is-complete", offlineGuests.length === 0);
   elements.leaveSeat.classList.toggle("is-hidden", isHost);
   elements.cleanupOffline.classList.toggle("is-hidden", !isHost);
   elements.openGuestTest.classList.toggle("is-hidden", !isHost || previewMode);
-  elements.leaveSeat.disabled = !connected || pending("leave-seat");
-  elements.cleanupOffline.disabled = !connected || offlineGuests.length === 0 || pending("cleanup-offline");
+  const pokerSeat = poker?.players.some((player) => player.playerId === app.state.you.id);
+  const offlinePokerSeat = poker?.players.some((player) => offlineGuests.some((guest) => guest.id === player.playerId));
+  elements.leaveSeat.disabled = !connected || Boolean(pokerSeat) || pending("leave-seat");
+  elements.cleanupOffline.disabled = !connected || Boolean(offlinePokerSeat) || offlineGuests.length === 0 || pending("cleanup-offline");
   elements.openGuestTest.disabled = !connected;
   for (const control of elements.toolsPanel.querySelectorAll(".host-tool")) {
     control.classList.toggle("is-hidden", !isHost);
@@ -1727,10 +1817,11 @@ function renderTools() {
   elements.cleanupOffline.textContent = offlineGuests.length > 0
     ? `清理 ${offlineGuests.length} 个离线席位`
     : "没有离线席位";
-  elements.leaveSeat.title = "离开席位，手牌归回牌盒";
-  elements.cleanupOffline.title = "清理离线席位，手牌归回牌盒";
+  elements.leaveSeat.title = pokerSeat ? "德州玩家可先在德州面板休息，结束助手后可以离席。" : "离开席位，手牌归回牌盒";
+  elements.cleanupOffline.title = offlinePokerSeat ? "先结束德州助手，再清理参加牌局的离线席位。" : "清理离线席位，手牌归回牌盒";
   renderPackLibrary();
   renderSelectionDock();
+  workspace?.renderSaveStatus();
 }
 
 function renderRoom() {
@@ -1754,6 +1845,9 @@ function renderRoom() {
   renderCursors();
   renderRemoteDrags();
   if (!app.cameraInitialized) fitCamera();
+  feedback?.consume(app.state);
+  recovery?.capture();
+  previewRecovery?.capture();
 }
 
 function applyCamera() {
@@ -1764,6 +1858,8 @@ function applyCamera() {
   elements.viewport.style.setProperty("--grid-y", `${y}px`);
   workspace?.drawMap();
   if (app.localCursor?.visible) renderCursors();
+  recovery?.capture();
+  previewRecovery?.capture();
 }
 
 function cameraLeftInset(rect) {
@@ -1777,12 +1873,16 @@ function fitCamera() {
   const rect = elements.viewport.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
   const geometry = app.state?.room.geometry || { width: 1800, height: 1100 };
+  const privateZone = app.handLayouts.get(app.state?.you.id);
+  const minX = Math.min(0, (privateZone?.x ?? 0) - 30), minY = Math.min(0, (privateZone?.y ?? 0) - 30);
+  const width = Math.max(geometry.width, privateZone ? privateZone.x + privateZone.width + 30 : 0) - minX;
+  const height = Math.max(geometry.height, privateZone ? privateZone.y + privateZone.height + 30 : 0) - minY;
   const left = cameraLeftInset(rect);
-  const scale = Math.max(rect.width < 600 ? 0.42 : 0.25, Math.min(0.84, (rect.width - left - 56) / geometry.width, (rect.height - 100) / geometry.height));
+  const scale = Math.max(rect.width < 600 ? 0.42 : 0.25, Math.min(0.84, (rect.width - left - 56) / width, (rect.height - 100) / height));
   app.camera = {
     scale,
-    x: left / 2 + (rect.width - geometry.width * scale) / 2,
-    y: (rect.height - geometry.height * scale) / 2 - 25
+    x: left / 2 + (rect.width - width * scale) / 2 - minX * scale,
+    y: (rect.height - height * scale) / 2 - 25 - minY * scale
   };
   app.cameraInitialized = true;
   app.cameraTouched = false;
@@ -2095,8 +2195,7 @@ function makeRemoteDragNode(preview) {
   const wrapper = document.createElement("div");
   wrapper.className = "remote-drag";
   wrapper.dataset.sourceType = preview.sourceType;
-  wrapper.style.left = `${preview.x}px`;
-  wrapper.style.top = `${preview.y}px`;
+  wrapper.style.transform = `translate(${preview.x}px, ${preview.y}px)`;
   wrapper.style.setProperty("--drag-player-color", preview.color || "#e9b94d");
 
   let resource = null;
@@ -2147,18 +2246,25 @@ function renderRemoteDrags() {
   for (const node of elements.world.querySelectorAll(".is-remote-source")) {
     node.classList.remove("is-remote-source");
   }
-  const nodes = [];
+  const nodes = new Map([...elements.remoteDragRoot.children].map((node) => [node.dataset.playerId, node]));
+  const visible = new Set();
   for (const preview of app.remoteDrags.values()) {
     if (preview.playerId === app.state.you.id) continue;
-    const node = makeRemoteDragNode(preview);
+    const signature = JSON.stringify([preview.sourceType, preview.resourceId, preview.cardIds, preview.placeFaceDown, app.state.revision]);
+    const old = nodes.get(preview.playerId);
+    const node = old?.dataset.signature === signature ? old : makeRemoteDragNode(preview);
     if (!node) continue;
-    nodes.push(node);
+    visible.add(preview.playerId);
+    node.dataset.playerId = preview.playerId; node.dataset.signature = signature;
+    node.style.transform = `translate(${preview.x}px, ${preview.y}px)`;
+    if (preview.sourceType === "card") node.querySelector(".remote-drag__resource").style.transform = `rotate(${preview.rotation || 0}deg)`;
+    if (node !== old) { if (old) old.replaceWith(node); else elements.remoteDragRoot.append(node); }
     const resourceIds = preview.sourceType === "stack" ? preview.cardIds : [preview.resourceId];
     for (const id of resourceIds) {
       sourceNodeFor(preview.sourceType, id)?.classList.add("is-remote-source");
     }
   }
-  elements.remoteDragRoot.replaceChildren(...nodes);
+  for (const [id, node] of nodes) if (!visible.has(id)) node.remove();
 }
 
 function scheduleCursorFlush() {
@@ -2213,18 +2319,20 @@ function sendCursor(worldPoint) {
     ? {
         sourceType: app.drag.sourceType,
         resourceId: app.drag.resource?.id || null,
+        dragId: app.drag.dragId,
         x: app.drag.x,
         y: app.drag.y,
         rotation: app.drag.rotation || 0,
         placeFaceDown: app.drag.placeFaceDown === true
       }
     : null;
-  app.queuedCursorMessage = { type: "cursor", x: worldPoint.x, y: worldPoint.y, drag };
+  app.queuedCursorMessage = { type: "cursor", x: Math.round(worldPoint.x * 10) / 10, y: Math.round(worldPoint.y * 10) / 10, drag };
   scheduleCursorFlush();
 }
 
-function endRemoteDragPreview() {
-  if (app.connectionOpen && !previewMode) postRealtimeMessage({ type: "drag-end" }, true);
+function endRemoteDragPreview(dragId) {
+  if (app.queuedCursorMessage?.drag?.dragId === dragId) app.queuedCursorMessage.drag = null;
+  if (app.connectionOpen && !previewMode) postRealtimeMessage({ type: "drag-end", dragId }, true);
 }
 
 function pointInside(point, rectangle) {
@@ -2308,6 +2416,14 @@ function setDragSourceClasses(drag, active) {
 function startDrag(event, sourceType, resource = null) {
   if (!app.state || !resource) return;
   if (app.drag || app.pan || app.touchNavigation || (event.pointerType === "touch" && (event.isPrimary === false || app.tableTouches.size))) return;
+  if (resource.managedBy === "holdem" && (resource.zone !== "hand" || resource.ownerId !== app.state.you.id)) {
+    selectResource(sourceType, resource.id); event.preventDefault(); return;
+  }
+  if (sourceType === "card" && resource.zone === "hand" && resource.ownerId !== app.state.you.id) {
+    selectResource("card", resource.id);
+    void feedback.requestCard(resource);
+    event.preventDefault(); return;
+  }
   if (!app.connectionOpen || resource.locked || (["card", "token"].includes(sourceType) && !resource.canControl)) {
     selectResource(sourceType, resource.id);
     return;
@@ -2356,6 +2472,7 @@ function startDrag(event, sourceType, resource = null) {
 
   const sourceNode = pocketNode || sourceNodeFor(sourceType, resource?.id);
   app.drag = {
+    dragId: crypto.randomUUID(),
     pointerId: event.pointerId,
     pointerType: event.pointerType,
     fromPocket: Boolean(pocketNode),
@@ -2398,6 +2515,7 @@ function moveDrag(event) {
     const distance = Math.hypot(event.clientX - app.drag.startClientX, event.clientY - app.drag.startClientY);
     if (distance < 5) return;
     app.drag.activated = true;
+    app.dragHeartbeat = window.setInterval(() => { if (app.drag?.activated) sendCursor(app.lastTablePoint || { x: app.drag.x, y: app.drag.y }); }, 500);
     elements.dragRoot.replaceChildren(app.drag.ghost);
     setDragSourceClasses(app.drag, true);
   }
@@ -2431,7 +2549,8 @@ function cancelDrag({ releaseCapture = true } = {}) {
   const drag = app.drag;
   if (!drag) return;
   app.drag = null;
-  if (drag.activated) endRemoteDragPreview();
+  clearInterval(app.dragHeartbeat); app.dragHeartbeat = null;
+  if (drag.activated) endRemoteDragPreview(drag.dragId);
   setDragSourceClasses(drag, false);
   if (releaseCapture) {
     try { drag.sourceNode?.releasePointerCapture?.(drag.pointerId); } catch { /* Pointer already released. */ }
@@ -2460,8 +2579,9 @@ function finishDrag(event) {
   if (!overlay && (inside || handTargetId)) {
     if (bag) command = { type: "bag-put", bagId: bag.id, resourceType: drag.sourceType, resourceId: drag.resource.id };
     else if (["deck", "card", "stack"].includes(drag.sourceType) && handTargetId) {
-      command = drag.sourceType === "deck" ? { type: "draw", deckId: drag.resource.id, ownerId: handTargetId }
-        : { type: drag.sourceType === "stack" ? "move-stack" : "move-card", cardId: drag.resource.id, target: "hand", ownerId: handTargetId };
+      const privatePoint = pointInside(point, app.handLayouts.get(handTargetId)) ? { x: drag.x, y: drag.y, rotation: drag.rotation } : {};
+      command = drag.sourceType === "deck" ? { type: "draw", deckId: drag.resource.id, ownerId: handTargetId, ...privatePoint }
+        : { type: drag.sourceType === "stack" ? "move-stack" : "move-card", cardId: drag.resource.id, target: "hand", ownerId: handTargetId, ...privatePoint };
     } else if (pointInside(point, app.state.room.geometry.publicZone)) {
       if (["token", "object", "deck"].includes(drag.sourceType)) command = {
         type: "move-resource", resourceType: drag.sourceType, resourceId: drag.resource.id, x: drag.x, y: drag.y
@@ -2483,10 +2603,16 @@ async function applyPreviewCommand(command) {
   const viewerId = app.state.you.id;
   const receipt = await window.ParlorPreview.applyCommand(app.previewModel, viewerId, command, { withReceipt: true });
   if (app.state.you.id === viewerId) syncPreviewState(viewerId);
+  await previewRecovery?.flush();
   return receipt;
 }
 async function postRealtimeMessage(message, quiet = false) {
-  if (previewMode) return { ok: true };
+  if (previewMode) {
+    const room = app.previewModel.engineRoom;
+    if (message.type === "card-request") return { ok: true, signal: window.ParlorEngine.requestPrivateCards(room, app.state.you.id, message.cardIds) };
+    if (message.type === "card-request-end") return { ok: true, signal: window.ParlorEngine.cancelPrivateCardRequest(room, app.state.you.id) };
+    return { ok: true };
+  }
   if (!app.sessionToken || !endpoint) return null;
   const body = JSON.stringify({ roomCode, sessionToken: app.sessionToken, message });
   if (quiet) {
@@ -2498,7 +2624,7 @@ async function postRealtimeMessage(message, quiet = false) {
     }).catch(() => {});
     return null;
   }
-  return fetchJson(apiUrl("/api/message"), {
+  return fetchJson(apiUrl(message.type === "command" && message.command?.type === "restore-game" ? "/api/game/restore" : "/api/message"), {
     method: "POST",
     headers: { "Content-Type": "text/plain;charset=UTF-8" },
     body
@@ -2506,6 +2632,10 @@ async function postRealtimeMessage(message, quiet = false) {
 }
 
 async function sendCommand(command, { withReceipt = false } = {}) {
+  if (app.previewTransition && !["restore-game", "restore-scene"].includes(command.type)) {
+    toast("正在备份并切换试玩桌面，请稍候再操作。");
+    return false;
+  }
   if (!app.connectionOpen) {
     toast("正在连接牌桌，请稍后再试。");
     return false;
@@ -2515,20 +2645,11 @@ async function sendCommand(command, { withReceipt = false } = {}) {
   if (app.state) renderTools();
   try {
     const viewerId = app.state?.you.id;
-    const result = previewMode ? await applyPreviewCommand(command) : await postRealtimeMessage({ type: "command", command });
-    if (!result?.ok) throw new Error("未能确认操作结果，请检查桌面后再试。");
+    const result = previewMode ? await applyPreviewCommand(command) : await recovery.send(command);
+    if (!result?.ok) return false;
     if (!previewMode && result.state?.you.id === viewerId && app.state?.you.id === viewerId && result.state.revision > app.state.revision) {
       app.state = result.state; app.player = result.state.you; renderRoom();
     }
-    if (command.type === "undo") toast("已恢复到上一步牌桌状态。 ");
-    else if (command.type === "shuffle") toast("这副牌已经洗好。");
-    else if (command.type === "shuffle-stack") toast("这个牌堆已经洗好。");
-    else if (command.type === "spread-stack") toast("牌堆已展开。 ");
-    else if (command.type === "replace-pack") toast("新牌盒已经铺上桌。 ");
-    else if (command.type === "tidy-public") toast("公共散牌已经整理。 ");
-    else if (command.type === "collect-public") toast("公共牌已回到各自的牌盒。");
-    else if (command.type === "deal-each") toast(`已给每位玩家发了 ${command.count} 张牌。`);
-    else if (command.type === "cleanup-offline") toast("离线席位已经释放。 ");
     return withReceipt ? result : true;
   } catch (error) {
     toast(error.message || "操作没有成功。", "error");
@@ -2569,6 +2690,7 @@ async function leaveCurrentSeat() {
   app.connectionOpen = false;
   clearCursorQueue();
   clearStoredSession();
+  await recovery.forget();
   app.sessionToken = null;
   app.player = null;
   app.state = null;
@@ -2609,7 +2731,7 @@ elements.joinForm.addEventListener("submit", async (event) => {
   submit.disabled = true;
   elements.joinError.textContent = "";
   try {
-    await joinRoom({ displayName: elements.displayName.value });
+    await joinRoom({ displayName: elements.displayName.value, seatKey: window.ParlorRecovery.parseSeatKey($("#seat-key").value) });
   } catch (error) {
     elements.joinError.textContent = error.message;
   } finally {
@@ -2626,6 +2748,7 @@ elements.startDemo.addEventListener("click", () => {
   window.location.assign(demoUrl.toString());
 });
 elements.retryRoom.addEventListener("click", () => void initialize());
+$("#retry-sync").addEventListener("click", () => { if (app.sessionToken) connectEvents(); else void initialize(); });
 elements.previewRole.addEventListener("click", switchPreviewRole);
 elements.toggleFocus.addEventListener("click", () => setFocusMode(!app.focusMode));
 elements.openHelp.addEventListener("click", showHelp);
@@ -3051,7 +3174,7 @@ document.addEventListener("keydown", (event) => {
     rotateDraggedCard(key === "q" ? -15 : 15);
   } else if ((key === "q" || key === "e") && selectedResource()?.type === "card") {
     const card = selectedResource().value;
-    if (card.zone === "public" && visibleStackForCard(card.id).length < 2) {
+    if ((card.zone === "public" || card.ownerId === app.state.you.id) && visibleStackForCard(card.id).length < 2) {
       event.preventDefault();
       runSelectionAction(key === "q" ? "rotate-left" : "rotate-right");
     }
@@ -3061,6 +3184,10 @@ document.addEventListener("keydown", (event) => {
   } else if (key === "h") {
     event.preventDefault();
     setFocusMode(!app.focusMode);
+  } else if (key === "l") {
+    event.preventDefault();
+    if (elements.historyPanel.classList.contains("is-open")) hideHistory();
+    else showHistory();
   } else if (key === "r" && !elements.rollDie.disabled) {
     event.preventDefault();
     sendCommand({ type: "roll-die" });
@@ -3084,11 +3211,15 @@ window.addEventListener("resize", () => {
   elements.toolsBackdrop.classList.toggle("is-hidden", !elements.toolsPanel.classList.contains("is-open") && !(libraryOpen && window.innerWidth < 760));
 });
 
-window.addEventListener("beforeunload", () => {
+window.addEventListener("beforeunload", (event) => {
+  if (previewRecovery?.hasUnsavedChanges()) { event.preventDefault(); event.returnValue = ""; }
+  void previewRecovery?.flush();
   app.closingStream = true;
   clearCursorQueue();
   app.eventSource?.close();
 });
+
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") void previewRecovery?.flush(); });
 
 window.addEventListener("blur", () => {
   cancelHandInteraction();
@@ -3101,7 +3232,7 @@ window.addEventListener("blur", () => {
 window.setInterval(() => {
   const now = Date.now();
   const cursorCutoff = now - 5000;
-  const dragCutoff = now - 1800;
+  const dragCutoff = now - 3500;
   let cursorsChanged = false;
   let dragsChanged = false;
   for (const [playerId, cursor] of app.remoteCursors) {
@@ -3123,16 +3254,38 @@ window.setInterval(() => {
 for (const control of document.querySelectorAll("[data-tooltip]")) {
   if (!control.title) control.title = control.dataset.tooltip;
 }
+recovery = window.ParlorRecovery.create({
+  app, endpoint, roomCode, previewMode, toast,
+  postMessage: postRealtimeMessage, receiveState: receiveRoomState,
+  onPendingChange: () => { if (app.state) renderTools(); },
+  onUncertain: (error) => {
+    setConnectionState("reconnecting");
+    if (!error.status) { app.connectionOpen = false; renderTools(); scheduleReconnect(app.eventSource); }
+  },
+  onSessionExpired: () => scheduleReconnect(app.eventSource)
+});
+if (previewMode) previewRecovery = window.ParlorPreviewRecovery.create({
+  app, query, packId: previewPackId, shareUrl: previewShareUrl, toast,
+  onStatus: () => workspace?.renderSaveStatus()
+});
 workspace = window.ParlorWorkspace.create({
   app, elements, previewMode, toast, sendCommand, screenToWorld,
   fitCamera, fitAll, focusWorldPoint, applyCamera, makeCardNode,
   makeSelectionAction, selectedResource, selectResource, clearSelection,
   showLibrary, toggleLibrary, hideSidePanels, cancelHandInteraction,
-  fetchScene: async (name) => {
-    const url = new URL(apiUrl("/api/save"));
+  copyText, personalLink: () => recovery.personalLink(),
+  restartPreview, openSavedPreview, retryPreviewSave: () => previewRecovery?.flush(),
+  fetchSeat: async (playerId) => {
+    const url = new URL(apiUrl("/api/seat"));
+    url.searchParams.set("room", roomCode); url.searchParams.set("session", app.sessionToken); url.searchParams.set("player", playerId);
+    return fetchJson(url.toString());
+  },
+  fetchScene: async (name, kind = "game") => {
+    const url = new URL(apiUrl(kind === "game" ? "/api/game" : "/api/save"));
     url.searchParams.set("room", roomCode); url.searchParams.set("session", app.sessionToken); url.searchParams.set("name", name);
     return fetchJson(url.toString());
   }
 });
+feedback = window.ParlorFeedback.create({ app, toast, clearSelection, sendCommand, postRealtimeMessage, openChat: () => workspace.showPanel("chat"), openHistory: showHistory, previewMode });
 syncToolDrawer();
 void initialize();

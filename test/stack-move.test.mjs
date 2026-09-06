@@ -121,8 +121,9 @@ for (const mode of ["server", "preview"]) {
         assert.equal(card.zone, "hand");
         assert.equal(card.ownerId, ownerId);
         assert.ok(card.face?.label);
-        assert.equal(card.x, null);
-        assert.equal(card.y, null);
+        const zone = received.players.find((player) => player.id === ownerId).privateZone;
+        assert.ok(card.x >= zone.x && card.x + 94 <= zone.x + zone.width);
+        assert.ok(card.y >= zone.y && card.y + 138 <= zone.y + zone.height);
         assert.equal(card.rotation, 0);
         assert.equal(observed.cards.find((candidate) => candidate.id === id).face, null);
       }

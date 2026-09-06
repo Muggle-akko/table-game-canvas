@@ -17,22 +17,25 @@
     const $ = (id) => document.getElementById(id);
     const vault = root.ParlorVault;
     const catalog = root.ParlorEngine.RESOURCE_CATALOG;
-    let category = "all", importedPacks = [], scenes = [], favorites = vault.favorites();
+    let category = "all", importedPacks = [], scenes = [], previews = [], favorites = vault.favorites();
+    let previewListSignature = "";
     let librarySignature = "", locationsSignature = "", handSignature = "", chatSignature = "";
     let initializedRoom = false, openAux = null, returnFocus = null, editorId = null, saving = false;
     let libraryDrag = null, lastDragAt = 0, spawnNumber = 0, spawning = false, seenMessages = new Set();
     const spawnQueue = [], pendingAssets = new Map();
     let mapBounds = { x: -200, y: -200, width: 2200, height: 1500 };
-    const panels = { world: $("world-panel"), chat: $("chat-panel"), saves: $("saves-panel") };
+    const panels = { world: $("world-panel"), chat: $("chat-panel"), saves: $("saves-panel"), holdem: $("holdem-panel") };
+    const holdemUI = root.ParlorHoldemUI.create(ui);
     const auxBackdrop = button("", "aux-backdrop is-hidden");
     auxBackdrop.setAttribute("aria-label", "关闭面板"); ui.elements.room.append(auxBackdrop);
 
     const handleError = (error) => ui.toast(error.message || "没有完成，请再试一次。", "error");
     const guarded = (operation) => Promise.resolve().then(operation).catch(handleError);
     async function refreshVault() {
-      const results = await Promise.allSettled([vault.listPacks(), vault.listScenes()]);
+      const results = await Promise.allSettled([vault.listPacks(), vault.listScenes(), ui.previewMode ? vault.listPreviews() : Promise.resolve([])]);
       if (results[0].status === "fulfilled") importedPacks = results[0].value;
       if (results[1].status === "fulfilled") scenes = results[1].value;
+      if (results[2].status === "fulfilled") previews = results[2].value;
       renderLibrary(true); renderSaves();
     }
 
@@ -89,6 +92,11 @@
         if (object.locked) heading.append(el("span", "", "已锁定"));
         node.append(heading);
         if (object.pattern === "checker") node.append(el("div", "checker-cells"));
+        if (object.pattern === "poker") {
+          const slots = el("div", "poker-mat-slots");
+          for (const label of ["翻", "牌", "", "转", "河"]) slots.append(el("span", "", label));
+          node.append(slots, el("div", "poker-mat-pot", "底池"));
+        }
       }
       if (object.locked && object.kind !== "mat") node.append(el("span", "object-lock", "锁"));
       return node;
@@ -374,7 +382,7 @@
     function closePanel({ returnFocus: restoreFocus = true } = {}) {
       hideMinimap();
       Object.values(panels).forEach((panel) => { panel.classList.remove("is-open"); panel.setAttribute("aria-hidden", "true"); });
-      for (const id of ["open-world", "open-chat", "open-saves"]) $(id).setAttribute("aria-expanded", "false");
+      for (const id of ["open-world", "open-chat", "open-saves", "open-holdem"]) $(id).setAttribute("aria-expanded", "false");
       auxBackdrop.classList.add("is-hidden"); openAux = null;
       if (restoreFocus) returnFocus?.focus({ preventScroll: true }); returnFocus = null;
     }
@@ -410,6 +418,10 @@
       }
       const canControl = resource.value.canControl !== false;
       const add = (action, label, iconName, disabled = false) => menu.append(ui.makeSelectionAction(action, iconName, label, { disabled: disabled || (action !== "inspect" && (!ui.app.connectionOpen || !canControl)) }));
+      if (resource.value.managedBy === "holdem" || resource.value.id === ui.app.state.holdem?.matId) {
+        if (resource.type !== "card") return null;
+        add("inspect", "放大看看", "eye"); extra.append(summary, menu); return extra;
+      }
       if (resource.type === "card") add("inspect", "放大看看", "eye");
       if (resource.type !== "token") add("resource-duplicate", "复制", "plus", resource.value.locked || (resource.value.kind === "bag" && resource.value.count > 0));
       add("resource-lock", resource.value.locked ? "解除锁定" : "锁定位置", "hand-grabbing");
@@ -418,6 +430,7 @@
       extra.append(summary, menu); return extra;
     }
     function handleAction(action, resource) {
+      if (action === "open-holdem") { showPanel("holdem"); return true; }
       const ref = { resourceType: resource.type, resourceId: resource.value.id };
       if (action.startsWith("resource-")) {
         const type = { "resource-duplicate": "duplicate-resource", "resource-lock": "lock-resource", "resource-delete": "delete-resource", "resource-save": "save-template" }[action];
@@ -432,26 +445,75 @@
       return false;
     }
 
-    async function currentScene() {
+    async function currentScene(kind = $("save-kind").value) {
       const name = $("save-name").value.trim() || ui.app.state.room.title;
-      if (ui.previewMode) return root.ParlorEngine.exportRoomScene(ui.app.previewModel.engineRoom, ui.app.state.you.id, name);
-      return ui.fetchScene(name);
+      if (ui.previewMode) return (kind === "scene" ? root.ParlorEngine.exportRoomScene : root.ParlorEngine.exportRoomGame)(ui.app.previewModel.engineRoom, ui.app.state.you.id, name);
+      return ui.fetchScene(name, kind);
     }
     function download(scene) {
       const url = URL.createObjectURL(new Blob([JSON.stringify(scene, null, 2)], { type: "application/json" }));
       const link = el("a"); link.href = url; link.download = `${scene.name || "Parlor"}.parlor.json`; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
+    function renderPreviewList() {
+      const others = previews.filter((record) => record.id !== ui.app.previewPersistence?.id);
+      $("other-previews").classList.toggle("is-hidden", !ui.previewMode || !others.length);
+      const signature = JSON.stringify([others, saving, ui.app.pendingCommands.size > 0]);
+      if (signature === previewListSignature) return;
+      previewListSignature = signature;
+      $("saved-previews").replaceChildren(...others.map((record) => {
+        const row = el("article", "saved-scene"), load = button(record.name || "试玩桌面", "saved-scene-load", "stack");
+        load.dataset.previewId = record.id;
+        load.append(el("small", "", `${record.playerCount} 人 · ${new Date(record.updatedAt).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`));
+        load.disabled = saving || ui.app.pendingCommands.size > 0;
+        load.addEventListener("click", () => guarded(() => ui.openSavedPreview(record)));
+        row.append(load); return row;
+      }));
+    }
+    function renderSaveStatus() {
+      if (!ui.app.state) return;
+      const host = ui.app.state.you.role === "host";
+      const persistence = ui.previewMode ? ui.app.previewPersistence : ui.app.state.persistence;
+      $("autosave-status").textContent = ui.app.previewTransition ? "正在保留当前桌面，完成后继续…" : persistence?.error || (ui.previewMode
+        ? persistence?.pending ? "正在保存试玩…" : persistence?.savedAt ? `试玩已自动保存到本机 · ${new Date(persistence.savedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "本机试玩，可保存或导出完整对局。"
+        : persistence?.enabled && persistence.savedAt ? `房主电脑已自动存档 · ${new Date(persistence.savedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "自动存档尚未确认，请先导出文件保留对局。");
+      $("autosave-status").classList.toggle("has-error", Boolean(persistence?.error));
+      $("preview-save-actions").classList.toggle("is-hidden", !ui.previewMode);
+      $("new-preview").disabled = !host || saving || ui.app.pendingCommands.size > 0;
+      $("retry-preview-save").classList.toggle("is-hidden", !persistence?.error);
+      $("retry-preview-save").disabled = saving;
+      $("seat-recovery").classList.toggle("is-hidden", ui.previewMode);
+      renderPreviewList();
+    }
     function renderSaves() {
       if (!ui.app.state) return;
       const host = ui.app.state.you.role === "host";
-      for (const id of ["save-scene", "save-name", "export-scene", "import-scene"]) $(id).disabled = !host || !ui.app.connectionOpen || saving;
+      for (const id of ["save-scene", "save-name", "save-kind", "export-scene", "import-scene"]) $(id).disabled = !host || !ui.app.connectionOpen || saving;
+      $("save-privacy").textContent = $("save-kind").value === "scene" ? "模板用于重新开局：手牌收回，牌堆重新洗牌。" : "完整对局包含所有私有牌面和续局口令，仅供房主保管。";
+      renderSaveStatus();
+      $("copy-my-seat").disabled = ui.previewMode || !ui.app.state.you.recoveryKey;
+      $("host-seat-links").classList.toggle("is-hidden", !host || ui.previewMode);
+      const playerSelect = $("recovery-player"), previousPlayer = playerSelect.value;
+      playerSelect.replaceChildren(...ui.app.state.players.filter((player) => player.id !== ui.app.state.you.id).map((player) => {
+        const option = el("option", "", player.name); option.value = player.id; return option;
+      }));
+      if (ui.app.state.players.some((player) => player.id === previousPlayer)) playerSelect.value = previousPlayer;
+      $("copy-player-seat").disabled = !host || !ui.app.connectionOpen || !playerSelect.children.length;
       const nodes = scenes.map((item) => {
         const node = el("article", "saved-scene"), load = button(item.name, "saved-scene-load", "stack");
-        load.append(el("small", "", new Date(item.updatedAt).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })));
-        load.disabled = !host || !ui.app.connectionOpen; load.title = "恢复这张桌面";
+        const isGame = item.scene.format === "parlor.game";
+        load.append(el("small", "", `${isGame ? "完整对局" : "布置模板"} · ${new Date(item.updatedAt).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`));
+        load.disabled = !host || !ui.app.connectionOpen || saving; load.title = isGame ? "恢复手牌、席位与牌堆顺序" : "恢复桌面布置并重新洗牌";
         load.addEventListener("click", () => guarded(async () => {
-          if (!window.confirm(`恢复「${item.name}」？将替换当前布置并收起手牌，房主可以撤销。`)) return;
-          if (await ui.sendCommand({ type: "restore-scene", scene: item.scene })) { closePanel(); ui.clearSelection(); ui.fitAll(); ui.toast(`已恢复「${item.name}」`); }
+          if (saving || !window.confirm(isGame ? `恢复「${item.name}」的对局与席位？恢复前会自动保存当前对局作为备份。旧撤销记录会清空。` : `铺上「${item.name}」？手牌将收回并重新洗牌，房主可以撤销。`)) return;
+          saving = true; ui.app.previewTransition = ui.previewMode; renderSaves();
+          try {
+            if (isGame) {
+              const backup = await currentScene("game"); backup.name = `恢复前 · ${backup.name}`.slice(0, 20);
+              await vault.saveScene(backup); await refreshVault();
+            }
+            const command = isGame ? { type: "restore-game", game: item.scene } : { type: "restore-scene", scene: item.scene };
+            if (await ui.sendCommand(command)) { closePanel(); ui.clearSelection(); ui.fitAll(); ui.toast(`已恢复「${item.name}」`); }
+          } finally { saving = false; ui.app.previewTransition = false; renderSaves(); }
         }));
         const remove = button("", "saved-scene-remove", "x"); remove.setAttribute("aria-label", `删除存档${item.name}`);
         remove.addEventListener("click", () => guarded(async () => { if (window.confirm(`删除本机存档「${item.name}」？当前桌面不会改变。`)) { await vault.deleteScene(item.id); await refreshVault(); } }));
@@ -466,9 +528,9 @@
     function render() {
       const state = ui.app.state; if (!state) return;
       renderObjects(); renderLibrary(); renderLocations(); renderHand(); renderChat(); drawMap();
-      $("presence-select").disabled = !ui.app.connectionOpen;
+      holdemUI.render();
       $("chat-input").disabled = !ui.app.connectionOpen;
-      $("presence-select").value = state.players.find((player) => player.id === state.you.id)?.status || "在桌边";
+      $("nickname-save").disabled = !ui.app.connectionOpen;
       if (!initializedRoom) {
         initializedRoom = true;
         guarded(refreshVault);
@@ -570,6 +632,12 @@
     });
     $("add-playmat").addEventListener("click", () => guarded(async () => { const entry = entries().find((item) => item.id === "playmat"); closePanel(); await addAsset(entry); }));
     $("open-hand").addEventListener("click", toggleHand); $("close-hand").addEventListener("click", toggleHand);
+    $("focus-private-zone").addEventListener("click", () => {
+      const zone = ui.app.handLayouts.get(ui.app.state.you.id); if (!zone) return;
+      if (!$("hand-drawer").classList.contains("is-hidden")) toggleHand();
+      ui.focusWorldPoint({ x: zone.x + zone.width / 2, y: zone.y + zone.height / 2 }, { minimumScale: .85 });
+    });
+    $("arrange-private-cards").addEventListener("click", () => void ui.sendCommand({ type: "arrange-hand" }));
     $("toggle-minimap").addEventListener("click", toggleMinimap);
     $("go-home").addEventListener("click", () => { ui.fitCamera(); hideMinimap({ returnFocus: true }); });
     $("minimap").addEventListener("click", (event) => { const rect = event.currentTarget.getBoundingClientRect(); ui.focusWorldPoint({ x: mapBounds.x + (event.clientX - rect.left) / rect.width * mapBounds.width, y: mapBounds.y + (event.clientY - rect.top) / rect.height * mapBounds.height }); if (innerWidth < 760) hideMinimap({ returnFocus: true }); });
@@ -577,7 +645,6 @@
       const offsets = { ArrowLeft: [180, 0], ArrowRight: [-180, 0], ArrowUp: [0, 180], ArrowDown: [0, -180] };
       if (offsets[event.key]) { event.preventDefault(); event.stopPropagation(); ui.app.camera.x += offsets[event.key][0]; ui.app.camera.y += offsets[event.key][1]; ui.applyCamera(); }
     });
-    $("presence-select").addEventListener("change", (event) => void ui.sendCommand({ type: "set-presence", status: event.target.value }));
     $("chat-form").addEventListener("submit", (event) => { event.preventDefault(); guarded(async () => { const text = $("chat-input").value.trim(); if (text && await ui.sendCommand({ type: "chat", text })) $("chat-input").value = ""; }); });
     $("resource-edit-form").addEventListener("submit", (event) => { event.preventDefault(); guarded(async () => { if (await ui.sendCommand({ type: "edit-resource", resourceType: "object", resourceId: editorId, label: $("resource-label").value, text: $("resource-text").value })) $("resource-editor").close(); }); });
     for (const node of document.querySelectorAll("[data-close-dialog]")) node.addEventListener("click", () => node.closest("dialog").close());
@@ -591,12 +658,39 @@
       finally { saving = false; renderSaves(); }
     }); });
     $("export-scene").addEventListener("click", () => guarded(async () => download(await currentScene())));
+    $("new-preview").addEventListener("click", () => guarded(async () => {
+      if (!ui.previewMode || saving || ui.app.pendingCommands.size || ui.app.state.you.role !== "host"
+        || !window.confirm("新开一张试玩桌面？当前完整对局会先保存为「新开前」备份。")) return;
+      saving = true; ui.app.previewTransition = true; renderSaves();
+      try {
+        const backup = await currentScene("game"); backup.name = `新开前 · ${backup.name}`.slice(0, 20);
+        await vault.saveScene(backup);
+        await ui.restartPreview(); await refreshVault();
+        ui.toast("已新开试玩，上一张桌面保存在「新开前」存档。");
+      } finally { saving = false; ui.app.previewTransition = false; renderSaves(); }
+    }));
+    $("retry-preview-save").addEventListener("click", () => guarded(async () => {
+      if (await ui.retryPreviewSave()) ui.toast("试玩已自动保存到本机。");
+    }));
+    $("save-kind").addEventListener("change", renderSaves);
+    $("copy-my-seat").addEventListener("click", () => guarded(async () => {
+      if (!await ui.copyText(ui.personalLink())) throw new Error("未能复制，请检查剪贴板权限。");
+      ui.toast("个人续局链接已复制，请自己保管。");
+    }));
+    $("copy-player-seat").addEventListener("click", () => guarded(async () => {
+      const seat = await ui.fetchSeat($("recovery-player").value);
+      if (!await ui.copyText(seat.recoveryKey)) throw new Error("未能复制，请检查剪贴板权限。");
+      ui.toast(`已复制 ${seat.name} 的续局口令，请只交给本人。`);
+    }));
     $("import-scene").addEventListener("click", () => $("scene-file").click());
     $("import-pack").addEventListener("click", () => $("pack-file").click());
     $("scene-file").addEventListener("change", (event) => guarded(async () => {
       const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
-      if (file.size > 1_048_576) throw new Error("存档不能超过 1 MB。");
-      const scene = JSON.parse(await file.text()); root.ParlorEngine.validateRoomScene(scene); await vault.saveScene(scene); await refreshVault(); $("save-status").textContent = "存档已导入，点击它可以恢复桌面。";
+      if (file.size > 12 * 1_048_576) throw new Error("存档不能超过 12 MB。");
+      const scene = JSON.parse(await file.text());
+      if (scene.format === "parlor.game") root.ParlorEngine.validateRoomGame(scene);
+      else { if (file.size > 1_048_576) throw new Error("布置模板不能超过 1 MB。"); root.ParlorEngine.validateRoomScene(scene); }
+      await vault.saveScene(scene); await refreshVault(); $("save-status").textContent = "存档已导入，点击它可以恢复桌面。";
     }));
     $("pack-file").addEventListener("change", (event) => guarded(async () => {
       const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
@@ -623,12 +717,13 @@
       if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return false;
       if (event.key.toLowerCase() === "b") { ui.toggleLibrary(); return true; }
       if (event.key.toLowerCase() === "c") { showPanel("chat"); return true; }
+      if (event.key.toLowerCase() === "t") { showPanel("holdem"); return true; }
       if (event.key.toLowerCase() === "i") { toggleHand(); return true; }
       if (event.key === " " && !event.target.closest("button, summary, a") && ui.selectedResource()?.type === "card") { event.preventDefault(); inspectCard(ui.selectedResource().value); return true; }
       return false;
     }
     renderWelcome();
-    return { render, renderLibrary, renderObjects, drawMap, makeObjectNode, extraActions, handleAction, editObject, keydown, closePanel, showPanel, hideMinimap, cancelLibraryDrag, kindNames };
+    return { render, renderLibrary, renderObjects, renderSaveStatus, drawMap, makeObjectNode, extraActions, handleAction, editObject, keydown, closePanel, showPanel, hideMinimap, cancelLibraryDrag, kindNames };
   }
   root.ParlorWorkspace = Object.freeze({ create });
 })(globalThis);

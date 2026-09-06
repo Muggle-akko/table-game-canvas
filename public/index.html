@@ -15,7 +15,11 @@
     <script defer src="./builtin-packs.js"></script>
     <script defer src="./preview-engine.js"></script>
     <script defer src="./vault.js"></script>
+    <script defer src="./room-recovery.js"></script>
+    <script defer src="./preview-recovery.js"></script>
+    <script defer src="./holdem-ui.js"></script>
     <script defer src="./workspace-ui.js"></script>
+    <script defer src="./room-feedback.js"></script>
     <script defer src="./app.js"></script>
   </head>
   <body>
@@ -30,6 +34,7 @@
               <span>选副牌</span>
               <select id="demo-pack">
                 <option value="standard-54">标准扑克 · 54 张</option>
+                <option value="holdem-52">德州扑克 · 52 张</option>
                 <option value="uno">UNO · 108 张</option>
                 <option value="moon-outpost">月面哨站 · 小小冒险</option>
               </select>
@@ -74,6 +79,7 @@
           </div>
         </div>
         <p id="join-room-meta" class="join-room-meta">正在读取牌桌信息…</p>
+        <div id="saved-seat-choices" class="saved-seat-choices"></div>
         <form id="join-form" class="join-form">
           <label for="display-name">名字</label>
           <div class="join-form__row">
@@ -87,6 +93,7 @@
             />
             <button class="primary-button" type="submit">坐下</button>
           </div>
+          <details class="join-recovery"><summary>回到上次的席位</summary><label for="seat-key">个人续局链接或口令</label><input id="seat-key" autocomplete="off" placeholder="粘贴后点「坐下」" /></details>
           <p id="join-error" class="form-error" role="alert"></p>
         </form>
       </div>
@@ -107,10 +114,9 @@
         <div id="mobile-player-strip" class="mobile-player-strip" aria-label="在座玩家快捷定位"></div>
 
         <div class="topbar__actions">
-          <select id="presence-select" class="presence-select" aria-label="我的桌边状态"><option>在桌边</option><option>摸鱼中</option><option>离开一下</option><option>等人中</option></select>
           <div class="topbar__status" aria-live="polite">
             <span id="connection-dot" class="connection-dot" role="status" aria-label="正在连接" title="正在连接"></span>
-            <span id="identity-chip" class="identity-chip"><i></i><span>玩家</span></span>
+            <button id="identity-chip" class="identity-chip" type="button" aria-label="修改昵称" title="修改昵称"><i></i><span>玩家</span></button>
           </div>
           <button id="preview-role" class="icon-button preview-role is-hidden" type="button" title="切换试玩视角">
             <i data-ph="arrows-left-right"></i><b>切换视角</b>
@@ -144,6 +150,7 @@
             <div id="remote-drag-root" class="remote-drag-root"></div>
             <div id="cursor-root" class="cursor-root"></div>
             <div id="ping-root" class="ping-root" aria-live="polite"></div>
+            <div id="table-effects" class="table-effects" aria-hidden="true"></div>
             <div id="drag-root" class="drag-root"></div>
           </div>
           <div id="local-cursor-root" class="local-cursor-root" aria-hidden="true"></div>
@@ -159,6 +166,8 @@
             </button>
             <button id="open-world" class="rail-button" type="button" aria-controls="world-panel" aria-expanded="false" data-tooltip="桌面导航" aria-label="桌面导航"><i data-ph="crosshair"></i><b>世界</b></button>
             <button id="open-chat" class="rail-button" type="button" aria-controls="chat-panel" aria-expanded="false" data-tooltip="聊天 · C" aria-label="聊天"><i data-ph="users-three"></i><b>聊天</b><span id="chat-unread" class="chat-unread is-hidden"></span></button>
+            <button id="open-history" class="rail-button" type="button" aria-controls="history-panel" aria-expanded="false" data-tooltip="操作历史 · L" aria-label="操作历史"><i data-ph="clock-counter-clockwise"></i><b>历史</b></button>
+            <button id="open-holdem" class="rail-button" type="button" aria-controls="holdem-panel" aria-expanded="false" data-tooltip="德州助手 · T" aria-label="德州助手"><i data-ph="cards-three"></i><b>德州</b></button>
           </div>
           <div class="table-rail__divider" aria-hidden="true"></div>
           <div class="table-rail__group">
@@ -197,10 +206,11 @@
         </div>
         <div id="minimap-panel" class="world-overview is-hidden" role="group" aria-label="小地图"><canvas id="minimap" width="360" height="216" tabindex="0" aria-label="桌面小地图，点击定位，方向键移动镜头"></canvas><button id="go-home" type="button" aria-label="回到主桌" title="回到主桌"><i data-ph="cards-three"></i></button></div>
         <button id="open-hand" class="hand-toggle" type="button" aria-expanded="false"><i data-ph="cards-three"></i><span>我的手牌</span><b id="hand-count">0</b></button>
-        <section id="hand-drawer" class="hand-drawer is-hidden" aria-label="我的私有手牌"><header><strong title="仅自己可见">手牌 <i data-ph="eye-slash"></i></strong><button id="close-hand" type="button" aria-label="收起手牌"><i data-ph="x"></i></button></header><div id="hand-cards" class="hand-cards"></div></section>
+        <section id="hand-drawer" class="hand-drawer is-hidden" aria-label="我的私有手牌"><header><strong title="仅自己可见">手牌 <i data-ph="eye-slash"></i></strong><div class="hand-drawer-actions"><button id="focus-private-zone" type="button" title="在桌面自由摆放私有牌">到私人区</button><button id="arrange-private-cards" type="button" title="整理自己的私有牌">整理</button><button id="close-hand" type="button" aria-label="收起手牌"><i data-ph="x"></i></button></div></header><div id="hand-cards" class="hand-cards"></div></section>
 
         <div id="reconnect-banner" class="reconnect-banner is-hidden" role="status">
           <span></span><strong id="reconnect-label">网络有波动，正在恢复同步…</strong>
+          <button id="retry-sync" type="button">重试</button>
         </div>
       </main>
 
@@ -216,7 +226,6 @@
             <button id="draw-card" class="tool-button" type="button"><i data-ph="cards-three"></i><strong>抽牌</strong></button>
             <button id="shuffle-deck" class="tool-button" type="button"><i data-ph="shuffle"></i><strong>洗中央牌堆</strong></button>
             <button id="undo-table" class="tool-button host-tool" type="button"><i data-ph="arrow-counter-clockwise"></i><strong>撤销</strong></button>
-            <button id="open-history" class="tool-button" type="button" aria-controls="history-panel" aria-expanded="false"><i data-ph="clock-counter-clockwise"></i><strong>历史</strong></button>
           </div>
         </section>
 
@@ -297,14 +306,55 @@
 
       <aside id="world-panel" class="aux-panel" aria-label="桌面导航" aria-hidden="true"><header><div><i data-ph="crosshair"></i><strong>桌面</strong></div><button type="button" data-close-aux aria-label="关闭桌面导航"><i data-ph="x"></i></button></header><div class="aux-panel__body"><div id="world-locations"></div><button id="add-playmat" class="outline-button" type="button"><i data-ph="plus"></i>添加桌垫</button></div></aside>
       <aside id="chat-panel" class="aux-panel chat-panel" aria-label="聊两句" aria-hidden="true"><header><div><i data-ph="users-three"></i><strong>聊两句</strong></div><button type="button" data-close-aux aria-label="关闭聊天"><i data-ph="x"></i></button></header><div id="chat-messages" class="chat-messages" role="log" aria-live="polite"></div><form id="chat-form" class="chat-form"><input id="chat-input" aria-label="发送给同桌朋友" placeholder="说点什么…" maxlength="280" autocomplete="off" /><button type="submit" aria-label="发送"><i data-ph="arrow-up"></i></button></form></aside>
-      <aside id="saves-panel" class="aux-panel saves-panel" aria-label="桌面存档" aria-hidden="true"><header><div><i data-ph="arrow-line-down"></i><strong>存档</strong></div><button type="button" data-close-aux aria-label="关闭存档"><i data-ph="x"></i></button></header><div class="aux-panel__body"><form id="save-form"><label for="save-name">名称</label><input id="save-name" maxlength="20" placeholder="我的桌面" required /><button id="save-scene" class="primary-button" type="submit">保存</button></form><p id="save-status" class="save-status" role="status"></p><div class="saved-heading"><strong>本机存档</strong></div><div id="saved-scenes"></div><div class="save-file-actions"><button id="export-scene" type="button"><i data-ph="arrow-line-down"></i>导出文件</button><button id="import-scene" type="button"><i data-ph="arrow-up"></i>导入存档</button></div></div></aside>
+      <aside id="saves-panel" class="aux-panel saves-panel" aria-label="对局存档" aria-hidden="true">
+        <header><div><i data-ph="arrow-line-down"></i><strong>存档与续局</strong></div><button type="button" data-close-aux aria-label="关闭存档"><i data-ph="x"></i></button></header>
+        <div class="aux-panel__body">
+          <p id="autosave-status" class="autosave-status" role="status"></p>
+          <div id="preview-save-actions" class="save-file-actions preview-save-actions is-hidden"><button id="new-preview" type="button">新开试玩</button><button id="retry-preview-save" class="is-hidden" type="button">重试自动保存</button></div>
+          <section id="seat-recovery" class="seat-recovery"><strong>下次回到这里</strong><button id="copy-my-seat" class="outline-button" type="button">复制我的续局链接</button><p>个人链接对应你的席位与手牌，请自己保管。房主重开后可在新房间粘贴这条链接。</p><div id="host-seat-links"><label for="recovery-player">替朋友找回席位</label><div class="seat-link-row"><select id="recovery-player" aria-label="选择需要续局的玩家"></select><button id="copy-player-seat" type="button">复制口令</button></div></div></section>
+          <form id="save-form"><label for="save-name">存档名称</label><input id="save-name" maxlength="20" placeholder="我的桌面" /><label for="save-kind">保存内容</label><select id="save-kind"><option value="game">完整对局 · 保留手牌与牌序</option><option value="scene">布置模板 · 手牌收回、重新洗牌</option></select><p id="save-privacy" class="save-hint">完整对局包含所有私有牌面和续局口令，仅供房主保管。</p><button id="save-scene" class="primary-button" type="submit">保存到本机</button></form>
+          <p id="save-status" class="save-status" role="status"></p><div class="saved-heading"><strong>本机存档</strong></div><div id="saved-scenes"></div><div class="save-file-actions"><button id="export-scene" type="button"><i data-ph="arrow-line-down"></i>导出文件</button><button id="import-scene" type="button"><i data-ph="arrow-up"></i>导入存档</button></div>
+          <section id="other-previews" class="other-previews is-hidden"><div class="saved-heading"><strong>其他试玩</strong></div><div id="saved-previews"></div></section>
+        </div>
+      </aside>
 
       <aside id="history-panel" class="history-panel" aria-label="操作历史" aria-hidden="true">
         <header class="history-panel__header">
           <div><i data-ph="clock-counter-clockwise"></i><strong>操作历史</strong></div>
           <button id="close-history" type="button" aria-label="关闭操作历史"><i data-ph="x"></i></button>
         </header>
+        <div class="history-filters">
+          <select id="history-player" aria-label="按玩家筛选历史"><option value="">所有玩家</option></select>
+          <select id="history-kind" aria-label="按操作筛选历史"><option value="">所有操作</option><option value="cards">卡牌</option><option value="objects">物件</option><option value="holdem">德州</option><option value="table">桌面与玩家</option></select>
+          <input id="history-search" type="search" placeholder="搜索操作" aria-label="搜索操作历史" />
+          <div class="history-meta"><span id="history-count" title="保留最近 500 条操作">0 条</span><button id="export-history" type="button">导出筛选结果</button></div>
+        </div>
         <div id="activity-list" class="activity-list"><p class="empty-activity">还没有动作。</p></div>
+      </aside>
+
+      <aside id="holdem-panel" class="aux-panel holdem-panel" aria-label="德州助手" aria-hidden="true">
+        <header><div><i data-ph="cards-three"></i><strong>德州</strong></div><button type="button" data-close-aux aria-label="关闭德州面板"><i data-ph="x"></i></button></header>
+        <div class="aux-panel__body">
+          <section id="holdem-setup"><p class="poker-intro">两张底牌，五张公共牌。<br />凑一桌，慢慢玩。</p><form id="holdem-setup-form">
+            <div class="poker-setup-fields"><label>初始筹码<input id="holdem-buyin" type="number" min="1" max="1000000" step="1" value="1000" required /></label><label>小盲<input id="holdem-small-blind" type="number" min="1" max="100000" step="1" value="5" required /></label><label>大盲<input id="holdem-big-blind" type="number" min="1" max="100000" step="1" value="10" required /></label></div>
+            <fieldset class="poker-seats"><legend>参加的玩家</legend><div id="holdem-seat-choices"></div></fieldset>
+            <button id="holdem-enable" class="primary-button" type="submit">铺好德州牌桌</button><p id="holdem-setup-status" class="save-hint"></p>
+          </form></section>
+          <section id="holdem-game" class="is-hidden">
+            <div class="poker-round"><strong id="holdem-phase"></strong><span id="holdem-hand-number"></span></div>
+            <div id="holdem-community" class="poker-community" aria-label="公共牌"></div>
+            <div class="poker-pot"><span id="holdem-pot-label">底池</span><output id="holdem-pot">0</output><span class="poker-chip-unit">筹码</span></div><div id="holdem-side-pots" class="poker-side-pots"></div><div id="holdem-refunds" class="poker-side-pots"></div>
+            <div class="poker-own-hand"><div><span>我的底牌</span><small id="holdem-own-stack"></small></div><div id="holdem-hole-cards" class="poker-hole-cards"></div></div>
+            <p id="holdem-status" class="poker-status" role="status" aria-live="polite"></p>
+            <form id="holdem-action-form" class="poker-action-form"><div class="poker-actions"><button id="holdem-fold" type="button">弃牌</button><button id="holdem-call" class="poker-main-action" type="button">过牌</button><button id="holdem-all-in" type="button">全下</button></div><label for="holdem-raise-to">加注到（本轮总额）</label><div class="poker-raise-row"><input id="holdem-raise-to" type="number" min="1" step="1" inputmode="numeric" /><button id="holdem-raise" type="submit">加注</button></div><div class="poker-bet-presets"><button type="button" data-poker-bet="minimum">最小</button><button type="button" data-poker-bet="half">半池</button><button type="button" data-poker-bet="pot">底池</button></div></form>
+            <div id="holdem-result" class="poker-result" role="status"></div>
+            <button id="holdem-next" class="primary-button poker-next" type="button">发牌开局</button>
+            <div id="holdem-players" class="poker-players" aria-label="玩家筹码与下注"></div>
+            <div class="poker-seat-actions"><button id="holdem-join" type="button">加入下一手</button><button id="holdem-sitout" type="button">下手休息</button><button id="holdem-rebuy" type="button">补充筹码</button><button id="holdem-reveal" type="button">亮出底牌</button></div>
+            <details class="poker-tools"><summary>牌桌工具</summary><div><button id="holdem-focus" type="button">去牌桌</button><button id="holdem-undo" type="button">撤销上一步</button><button id="holdem-fold-offline" type="button">为离线玩家弃牌</button><button id="holdem-close" type="button">结束德州助手</button></div></details>
+          </section>
+          <details class="poker-rules"><summary>怎么开始</summary><p>使用独立的 52 张牌和虚拟筹码。房主发牌，每位玩家在自己的回合过牌、跟注、加注或弃牌。底牌只对本人可见，可在私人区自由摆放。</p><p>每轮下注结束后，房主依次发翻牌、转牌和河牌，最后摊牌。助手自动烧牌、处理全下与边池，并按七张牌中的最佳五张结算；平分时的零头从庄家左侧顺时针分配。</p><p>没有倒计时，断线可等待朋友回到原席位。下一手保留筹码并轮换庄家；存档可保留当前下注进度。</p></details>
+        </div>
       </aside>
 
       <button id="tools-backdrop" class="tools-backdrop is-hidden" type="button" aria-label="关闭侧边面板"></button>
@@ -320,7 +370,7 @@
         <div class="help-grid help-grid--compact">
           <article><span>01</span><strong>拖动与旋转</strong><p>拖动资源改变位置。手机手牌横滑浏览，向桌面拖出出牌。拖牌时按 <kbd>Q</kbd>/<kbd>E</kbd>，或按住 <kbd>⌥</kbd> 左右移动即可旋转。</p></article>
           <article><span>02</span><strong>整组拿起来</strong><p>重叠的牌会叠成一组，拖动时整组一起走。轻点后可抽一张、洗牌或展开。牌盒双击抽牌，拖动移动整副。</p></article>
-          <article><span>03</span><strong>到处玩一玩</strong><p>按 <kbd>B</kbd> 拿资源，<kbd>I</kbd> 看手牌。拖空白移动，滚动缩放，手机也可双指移动和缩放。<kbd>F</kbd> 看全景。</p></article>
+          <article><span>03</span><strong>私人区随手摆</strong><p>按 <kbd>I</kbd> 看手牌，点「到私人区」可自由摆放和旋转。点朋友的牌背会用你的颜色标记 8 秒，可连续选择多张，再由朋友交给你。按 <kbd>L</kbd> 查历史。</p></article>
           <article><span>04</span><strong>下次接着玩</strong><p>存档保留整张桌面的布置，手牌在存档中归回牌盒。存档存在当前浏览器，也可以导出文件。</p></article>
         </div>
         <footer class="help-sheet__footer">
@@ -331,6 +381,8 @@
     </div>
 
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <div id="room-notices" class="room-notices" aria-live="polite" aria-relevant="additions" aria-label="同桌动态"></div>
+    <dialog id="nickname-editor" class="workspace-dialog"><form id="nickname-form"><header><h2>修改昵称</h2><button type="button" data-close-dialog aria-label="关闭昵称编辑"><i data-ph="x"></i></button></header><label for="nickname-input">昵称</label><input id="nickname-input" maxlength="20" required autocomplete="nickname" /><button id="nickname-save" class="primary-button" type="submit">保存昵称</button></form></dialog>
     <input id="pack-file" type="file" accept=".json,application/json" hidden />
     <input id="scene-file" type="file" accept=".json,application/json" hidden />
     <dialog id="resource-editor" class="workspace-dialog"><form id="resource-edit-form"><header><h2>编辑物件</h2><button type="button" data-close-dialog aria-label="关闭编辑"><i data-ph="x"></i></button></header><label for="resource-label">名字</label><input id="resource-label" maxlength="20" required /><label id="resource-text-label" for="resource-text">写点什么</label><textarea id="resource-text" maxlength="600" rows="5"></textarea><button class="primary-button" type="submit">放回桌上</button></form></dialog>

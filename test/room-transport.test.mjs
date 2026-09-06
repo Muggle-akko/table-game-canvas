@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRoom } from "../src/room-engine.mjs";
+import { createRoom, RoomError, exportRoomCheckpoint, roomFromCheckpoint } from "../src/room-engine.mjs";
 import { createRoomTransport } from "../src/room-transport.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -83,6 +83,40 @@ function lastRoomState(response) {
 function messageBody(roomCode, sessionToken, message) {
   return { roomCode, sessionToken, message };
 }
+
+test("duplicate commands, including concurrent pack loads and restart retries, mutate only once", async () => {
+  let room = createRoom({ code: "ONE-123", pack, hostSecret: "receipt-host-secret" });
+  let loaded = 0, diskCheckpoint, failSave = false;
+  const persistence = { save: async () => { if (failSave) throw new RoomError("SAVE_FAILED", "disk full", 503); diskCheckpoint = exportRoomCheckpoint(room); } };
+  let transport = createRoomTransport(room, { persistence, loadPack: async () => { loaded++; await Promise.resolve(); return unoPack; } });
+  const join = await call(transport, { method: "POST", url: "/api/join", body: { roomCode: room.code, hostSecret: room.hostSecret } });
+  const sessionToken = join.response.json().sessionToken;
+  const execute = (id, command, extra = {}) => call(transport, { method: "POST", url: "/api/message", body: messageBody(room.code, sessionToken, { type: "command", id, command, ...extra }) });
+  try {
+    const command = { type: "add-pack", packId: "uno", x: 1400, y: 600 };
+    const [first, second] = await Promise.all([execute("pack-once-001", command), execute("pack-once-001", command)]);
+    assert.equal(first.response.statusCode, 200); assert.equal(second.response.statusCode, 200);
+    assert.deepEqual(first.response.json().createdResource, second.response.json().createdResource);
+    assert.equal(loaded, 1); assert.equal(room.decks.size, 2);
+    assert.equal(second.response.json().duplicate, true);
+    assert.equal((await execute("pack-once-001", { type: "draw" })).response.json().code, "COMMAND_ID_REUSED");
+    failSave = true;
+    const failed = await execute("draw-once-001", { type: "draw" });
+    assert.equal(failed.response.json().code, "SAVE_FAILED");
+    assert.equal(room.deckOrder.length, pack.cards.length - 1);
+    failSave = false;
+    const retry = await execute("draw-once-001", { type: "draw" });
+    assert.equal(retry.response.json().duplicate, true);
+    assert.equal(room.deckOrder.length, pack.cards.length - 1);
+    transport.close();
+    room = roomFromCheckpoint(JSON.parse(JSON.stringify(diskCheckpoint)));
+    transport = createRoomTransport(room, { persistence });
+    assert.equal((await execute("draw-once-001", { type: "draw" })).response.json().duplicate, true);
+    assert.equal(room.deckOrder.length, pack.cards.length - 1);
+    room.receiptFloorRevision = room.revision;
+    assert.equal((await execute("expired-operation", { type: "draw" }, { baseRevision: 0 })).response.json().code, "RECEIPT_EXPIRED");
+  } finally { transport.close(); }
+});
 
 test("the authoritative transport filters private faces across join, move, and refresh", async () => {
   const room = createRoom({
@@ -529,7 +563,7 @@ test("streams sanitized drag previews while keeping private card faces off the w
   }
 });
 
-test("streams the complete authoritative stack and broadcasts its move atomically", async () => {
+test("streams a compact authoritative stack preview and broadcasts its move atomically", async () => {
   const room = createRoom({ code: "INK-204", hostName: "房主A", hostSecret: "host-secret", pack, randomizeDeck: false });
   const transport = createRoomTransport(room);
   try {
@@ -563,7 +597,7 @@ test("streams the complete authoritative stack and broadcasts its move atomicall
     });
     const remoteDrag = eventPayloads(guestEvents.response).filter((event) => event.type === "cursor").at(-1).drag;
     assert.deepEqual(remoteDrag, {
-      sourceType: "stack", resourceId: anchor.id, cardIds: stack.map((card) => card.id),
+      sourceType: "stack", resourceId: anchor.id, cardCount: stack.length,
       x: 700, y: 400, rotation: 0, placeFaceDown: false
     });
     assert.equal(JSON.stringify(remoteDrag).includes(privateCard.face.label), false);
@@ -851,6 +885,7 @@ test("supports a separately deployed frontend without exposing private room stat
     assert.equal(summary.response.headers.Vary, "Origin");
     assert.deepEqual(Object.keys(summary.response.json()).sort(), [
       "defaultGuestName",
+      "gameId",
       "maxPlayers",
       "packName",
       "playerCount",
@@ -901,6 +936,62 @@ async function resourceTransportFixture(loadPack) {
   const guestStream = await call(transport, { url: `/api/events?room=${room.code}&session=${guest.sessionToken}` });
   return { room, transport, host, guest, hostStream, guestStream, message, command };
 }
+
+test("private-card signals are colored by the sender, have no face payload and need owner acceptance", async () => {
+  const f = await resourceTransportFixture();
+  try {
+    await f.command(f.host, { type: "draw", ownerId: f.guest.player.id });
+    await f.command(f.host, { type: "draw", ownerId: f.guest.player.id });
+    const guestView = lastRoomState(f.guestStream.response);
+    const cards = guestView.cards.filter((card) => card.ownerId === f.guest.player.id);
+    const before = f.room.revision, undoDepth = f.room.undoStack.length;
+    const response = await f.message(f.host, { type: "card-request", cardIds: cards.map((card) => card.id), color: "#000000", playerId: f.guest.player.id, face: cards[0].face });
+    assert.equal(response.response.statusCode, 200);
+    const signal = eventPayloads(f.guestStream.response).at(-1);
+    assert.equal(signal.type, "card-request");
+    assert.equal(signal.playerId, f.host.player.id); assert.equal(signal.color, f.host.player.color);
+    assert.equal(signal.ownerId, f.guest.player.id);
+    assert.equal(signal.cardIds.length, 2);
+    assert.equal(JSON.stringify(signal).includes(cards[0].face.label), false);
+    assert.equal(f.room.revision, before); assert.equal(f.room.undoStack.length, undoDepth);
+    const rejected = await f.message(f.host, { type: "command", command: { type: "accept-card-request", requestId: signal.id } });
+    assert.equal(rejected.response.statusCode, 403);
+    await f.command(f.guest, { type: "accept-card-request", requestId: signal.id });
+    assert.ok(lastRoomState(f.hostStream.response).cards.every((card) => card.face));
+    assert.ok(lastRoomState(f.guestStream.response).cards.every((card) => card.face === null));
+  } finally { f.transport.close(); }
+});
+
+test("a late cursor cannot resurrect an ended drag and newer gestures still work", async (t) => {
+  const f = await resourceTransportFixture();
+  try {
+    const created = await f.command(f.host, { type: "spawn-resource", resourceId: "die-d6", x: 800, y: 400 });
+    let clock = Date.now(); t.mock.method(Date, "now", () => clock);
+    await f.message(f.host, { type: "drag-end", dragId: "finished-gesture" });
+    await f.message(f.host, { type: "cursor", x: 800, y: 400, drag: { sourceType: "object", resourceId: created.createdResource.id, dragId: "finished-gesture", x: 800, y: 400 } });
+    assert.equal(eventPayloads(f.guestStream.response).filter((event) => event.type === "cursor").at(-1).drag, null);
+    clock += 100;
+    await f.message(f.host, { type: "cursor", x: 900, y: 400, drag: { sourceType: "object", resourceId: created.createdResource.id, dragId: "new-gesture", x: 900, y: 400 } });
+    assert.equal(eventPayloads(f.guestStream.response).filter((event) => event.type === "cursor").at(-1).drag.dragId, "new-gesture");
+  } finally { f.transport.close(); }
+});
+
+test("drag payload size stays bounded for a complete 108-card stack", async () => {
+  const f = await resourceTransportFixture();
+  try {
+    const added = await f.command(f.host, { type: "add-pack", packId: "uno", x: 800, y: 400 });
+    const deckId = added.createdResource.id;
+    for (let index = 0; index < 108; index++) await f.command(f.host, { type: "draw-public", deckId, x: 600, y: 400 });
+    const card = [...f.room.cards.values()].find((card) => card.deckId === deckId);
+    const beforeRevision = f.room.revision;
+    await f.message(f.host, { type: "cursor", x: 710, y: 430, drag: { sourceType: "stack", resourceId: card.id, dragId: "whole-pack", x: 700, y: 420 } });
+    const event = eventPayloads(f.guestStream.response).filter((event) => event.type === "cursor").at(-1);
+    assert.equal(event.drag.cardCount, 108);
+    assert.equal(Object.hasOwn(event.drag, "cardIds"), false);
+    assert.ok(Buffer.byteLength(JSON.stringify(event)) < 500, "stack growth must not expand the 10 Hz packet into a full list");
+    assert.equal(f.room.revision, beforeRevision);
+  } finally { f.transport.close(); }
+});
 
 test("delayed pack loading returns its own creation receipt after a different player's spawn", async () => {
   let resolvePack;

@@ -1,6 +1,6 @@
 {
   "name": "table-game-canvas",
-  "version": "0.6.0",
+  "version": "0.11.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,12 +8,13 @@
     "build:client": "node scripts/build-client.mjs",
     "precheck": "node scripts/build-client.mjs --check",
     "predev": "node scripts/build-client.mjs",
-    "check": "node --check src/server.mjs && node --check src/room-engine.mjs && node --check src/room-assets.mjs && node --check src/room-transport.mjs && node --check src/tunnel.mjs && node --check public/phosphor-icons.js && node --check public/tabletop-engine.js && node --check public/builtin-packs.js && node --check public/vault.js && node --check public/workspace-ui.js && node --check public/preview-engine.js && node --check public/app.js && node --check scripts/build-static.mjs && node --check scripts/install-cloudflared.mjs && node --check scripts/static-audit.mjs && node --check scripts/validate-pack.mjs && node scripts/static-audit.mjs && node scripts/validate-pack.mjs ./game-packs/standard-54.json ./game-packs/uno.json ./game-packs/parlor-eight.json ./game-packs/moon-outpost.json && node --test test/*.test.mjs",
+    "check": "node --check src/server.mjs && node --check src/room-engine.mjs && node --check src/holdem-rules.mjs && node --check src/room-assets.mjs && node --check src/room-persistence.mjs && node --check src/room-transport.mjs && node --check src/tunnel.mjs && node --check public/phosphor-icons.js && node --check public/tabletop-engine.js && node --check public/builtin-packs.js && node --check public/vault.js && node --check public/room-recovery.js && node --check public/preview-recovery.js && node --check public/holdem-ui.js && node --check public/workspace-ui.js && node --check public/room-feedback.js && node --check public/preview-engine.js && node --check public/app.js && node --check scripts/build-static.mjs && node --check scripts/install-cloudflared.mjs && node --check scripts/static-audit.mjs && node --check scripts/validate-pack.mjs && node scripts/static-audit.mjs && node scripts/validate-pack.mjs ./game-packs/standard-54.json ./game-packs/uno.json ./game-packs/parlor-eight.json ./game-packs/moon-outpost.json ./game-packs/holdem-52.json && node --test test/*.test.mjs",
     "dev": "node src/server.mjs --local --no-open",
     "room": "node src/server.mjs",
     "setup:tunnel": "node scripts/install-cloudflared.mjs",
     "validate:pack": "node scripts/validate-pack.mjs",
     "test": "node --test test/*.test.mjs",
+    "test:network": "PARLOR_HTTP_TESTS=1 node --test test/room-recovery.test.mjs",
     "preroom": "node scripts/build-client.mjs"
   },
   "engines": {

@@ -4,7 +4,10 @@ import {
   applyCommand,
   addRoomPack,
   exportRoomScene,
+  exportRoomGame,
   restoreRoomScene,
+  restoreRoomGame,
+  validateRoomGame,
   joinRoom,
   playerForSession,
   publicStackForCard,
@@ -12,9 +15,12 @@ import {
   replaceRoomPack,
   roomSummary,
   setPlayerConnection,
+  requestPrivateCards,
+  cancelPrivateCardRequest,
   validatePortablePack
 } from "./room-engine.mjs";
 import { RoomAssetError } from "./room-assets.mjs";
+import { createHash } from "node:crypto";
 
 function corsHeaders(request) {
   return {
@@ -59,12 +65,12 @@ function writeEvent(stream, payload) {
   }
 }
 
-async function readJsonBody(request) {
+async function readJsonBody(request, limit = 1_048_576) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 1_048_576) throw new RoomError("BODY_TOO_LARGE", "请求超过 1 MB，请缩小资源包或存档。", 413);
+    if (size > limit) throw new RoomError("BODY_TOO_LARGE", `请求超过 ${limit / 1_048_576} MB，请缩小资源包或存档。`, 413);
     chunks.push(chunk);
   }
   if (chunks.length === 0) return {};
@@ -79,7 +85,7 @@ function safeRoomMatch(room, value) {
   return String(value ?? "").toUpperCase() === room.code;
 }
 
-function sanitizeDragPreview(room, player, value) {
+function sanitizeDragPreview(room, player, value, stackCache) {
   if (!value || typeof value !== "object") return null;
   const sourceType = String(value.sourceType || "");
   if (!["card", "stack", "deck", "token", "object"].includes(sourceType)) return null;
@@ -88,13 +94,18 @@ function sanitizeDragPreview(room, player, value) {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
 
   let resourceId = null;
-  let cardIds = null;
+  let cardCount = null;
   if (sourceType === "stack") {
     resourceId = String(value.resourceId || "");
     try {
-      const cards = publicStackForCard(room, resourceId);
-      if (cards.some((card) => card.locked)) return null;
-      cardIds = cards.map((card) => card.id);
+      let cached = stackCache.get(player.id);
+      if (!cached || cached.revision !== room.revision || cached.resourceId !== resourceId) {
+        cached = { revision: room.revision, resourceId, cards: publicStackForCard(room, resourceId) };
+        stackCache.set(player.id, cached);
+      }
+      const cards = cached.cards;
+      if (cards.some((card) => card.locked || card.deckId === room.holdem?.deckId)) return null;
+      cardCount = cards.length;
     } catch (error) {
       if (error instanceof RoomError) return null;
       throw error;
@@ -103,7 +114,7 @@ function sanitizeDragPreview(room, player, value) {
     resourceId = String(value.resourceId || "");
     const card = room.cards.get(resourceId);
     const canControl = card && !["deck", "bag"].includes(card.zone)
-      && (player.role === "host" || card.zone === "public" || card.ownerId === player.id);
+      && (card.deckId === room.holdem?.deckId ? card.zone === "hand" && card.ownerId === player.id : player.role === "host" || card.zone === "public" || card.ownerId === player.id);
     if (!canControl || card.locked) return null;
   } else if (sourceType === "token") {
     resourceId = String(value.resourceId || "");
@@ -121,7 +132,8 @@ function sanitizeDragPreview(room, player, value) {
   return {
     sourceType,
     resourceId,
-    ...(cardIds ? { cardIds } : {}),
+    ...(cardCount ? { cardCount } : {}),
+    ...(typeof value.dragId === "string" && /^[\w-]{1,80}$/.test(value.dragId) ? { dragId: value.dragId } : {}),
     x: clampWorld(x, "x"),
     y: clampWorld(y, "y"),
     rotation: Math.max(-180, Math.min(180, Number(value.rotation) || 0)),
@@ -134,11 +146,88 @@ function clampWorld(value, axis) {
   return Math.max(zone[axis], Math.min(zone[axis] + zone[axis === "x" ? "width" : "height"], value));
 }
 
-export function createRoomTransport(room, { loadAsset = null, loadPack = null } = {}) {
+export function createRoomTransport(room, { loadAsset = null, loadPack = null, persistence = null } = {}) {
   const streams = new Set();
   const lastCursorAt = new Map();
   const lastPingAt = new Map();
+  const stackCache = new Map(), endedDrags = new Map();
   let nextPingId = 1;
+  let commandQueue = Promise.resolve();
+  const operations = new Set();
+  let closing = false;
+  const tracked = (promise) => {
+    operations.add(promise);
+    promise.then(() => operations.delete(promise), () => operations.delete(promise));
+    return promise;
+  };
+  const serialize = (operation) => {
+    const next = commandQueue.catch(() => {}).then(operation);
+    commandQueue = next;
+    return next;
+  };
+  const persist = () => persistence?.save();
+  const packLoads = new Map();
+
+  const executeCommand = async (playerId, message) => {
+    const command = message.command;
+    const commandId = message.id;
+    if (commandId !== undefined && (typeof commandId !== "string" || !/^[\w-]{8,80}$/.test(commandId))) throw new RoomError("INVALID_COMMAND_ID", "操作编号无效。");
+    if (!command || typeof command.type !== "string") throw new RoomError("INVALID_COMMAND", "无法识别这次操作。");
+    const fingerprint = createHash("sha256").update(JSON.stringify(command)).digest("hex");
+    const receiptKey = commandId ? `${playerId}:${commandId}` : null;
+    let loadedPack;
+    if (["replace-pack", "add-pack"].includes(command.type) && !room.commandReceipts.has(receiptKey)) {
+      if (typeof loadPack !== "function") throw new RoomError("PACK_NOT_AVAILABLE", "这个房间没有可更换的牌盒。", 404);
+      const id = String(command.packId || "").slice(0, 40);
+      if (!packLoads.has(id)) packLoads.set(id, Promise.resolve().then(() => loadPack(id)));
+      try { loadedPack = await packLoads.get(id); }
+      finally { packLoads.delete(id); }
+    }
+    return serialize(async () => {
+    const player = room.players.get(playerId);
+    if (!player) throw new RoomError("SESSION_EXPIRED", "这个席位已离开，请重新入座。", 401);
+    const previous = receiptKey ? room.commandReceipts.get(receiptKey) : null;
+    if (previous && previous.fingerprint !== fingerprint) throw new RoomError("COMMAND_ID_REUSED", "这次操作编号已被用于另一项操作，请刷新页面。", 409);
+    let createdResource = previous?.createdResource;
+    if (!previous) {
+      if (message.gameId && message.gameId !== room.gameId) throw new RoomError("GAME_CHANGED", "房主已经切换对局，这次旧操作没有执行。", 409);
+      if (message.epoch && message.epoch !== room.epoch) throw new RoomError("GAME_CHANGED", "房主已经撤销操作或恢复存档，这次旧操作没有执行。", 409);
+      if (Number.isSafeInteger(message.baseRevision) && message.baseRevision <= room.receiptFloorRevision) throw new RoomError("RECEIPT_EXPIRED", "这次操作的回执已过期，请检查桌面后重新操作。", 409);
+      const beforePlayers = new Set(room.players.keys());
+      if (["replace-pack", "add-pack"].includes(command.type)) {
+        if (command.type === "add-pack") createdResource = { type: "deck", id: addRoomPack(room, player.id, loadedPack, command) };
+        else replaceRoomPack(room, player.id, loadedPack);
+      } else if (command.type === "import-pack") {
+        if (player.role !== "host") throw new RoomError("HOST_ONLY", "只有房主可以导入牌盒。", 403);
+        createdResource = { type: "deck", id: addRoomPack(room, player.id, validatePortablePack(command.pack), command) };
+      } else if (command.type === "restore-scene") {
+        restoreRoomScene(room, player.id, command.scene);
+      } else if (command.type === "restore-game") {
+        if (player.role !== "host") throw new RoomError("HOST_ONLY", "只有房主可以恢复完整对局。", 403);
+        validateRoomGame(command.game);
+        await persistence?.backup();
+        restoreRoomGame(room, player.id, command.game);
+      } else createdResource = applyCommand(room, player.id, command)?.createdResource;
+      if (receiptKey) {
+        room.commandReceipts.set(receiptKey, { fingerprint, revision: room.revision, ...(createdResource ? { createdResource } : {}) });
+        while (room.commandReceipts.size > 1024) {
+          const oldest = room.commandReceipts.keys().next().value;
+          room.receiptFloorRevision = Math.max(room.receiptFloorRevision, room.commandReceipts.get(oldest).revision);
+          room.commandReceipts.delete(oldest);
+        }
+      }
+      for (const id of beforePlayers) if (!room.players.has(id)) broadcastCursorLeave(id);
+    }
+    try { await persist(); }
+    catch (error) { broadcastState(); throw error; }
+    broadcastState();
+    return {
+      ok: true, revision: room.revision, duplicate: Boolean(previous), durable: Boolean(persistence),
+      ...(room.players.has(playerId) ? { state: projectRoom(room, playerId) } : {}),
+      ...(createdResource ? { createdResource } : {})
+    };
+    });
+  };
 
   const removeStream = (stream, { announce = true } = {}) => {
     if (!streams.has(stream)) return;
@@ -241,24 +330,43 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
         return true;
       }
 
-      if (request.method === "GET" && requestUrl.pathname === "/api/save") {
+      if (request.method === "GET" && ["/api/save", "/api/game", "/api/state", "/api/seat"].includes(requestUrl.pathname)) {
         if (!safeRoomMatch(room, requestUrl.searchParams.get("room"))) throw new RoomError("ROOM_NOT_FOUND", "房间不在。", 404);
         const player = playerForSession(room, requestUrl.searchParams.get("session") || "");
         if (!player) throw new RoomError("SESSION_EXPIRED", "请重新加入房间。", 401);
-        sendJson(request, response, 200, exportRoomScene(room, player.id, requestUrl.searchParams.get("name") || room.title));
+        let result;
+        if (requestUrl.pathname === "/api/state") result = projectRoom(room, player.id);
+        else if (requestUrl.pathname === "/api/seat") {
+          const targetId = requestUrl.searchParams.get("player") || player.id;
+          if (player.role !== "host" && targetId !== player.id) throw new RoomError("NO_CONTROL", "你只能领取自己的续局口令。", 403);
+          const target = room.players.get(targetId);
+          if (!target) throw new RoomError("PLAYER_NOT_FOUND", "没有这个席位。", 404);
+          result = { playerId: target.id, name: target.name, recoveryKey: target.recoveryKey, gameId: room.gameId };
+        } else {
+          const exportGame = requestUrl.pathname === "/api/game" ? exportRoomGame : exportRoomScene;
+          result = exportGame(room, player.id, requestUrl.searchParams.get("name") || room.title);
+        }
+        sendJson(request, response, 200, result);
         return true;
       }
 
       if (request.method === "POST" && requestUrl.pathname === "/api/join") {
+        if (closing) throw new RoomError("ROOM_CLOSING", "房主正在保存并关闭这桌，请稍后续局。", 503);
         const body = await readJsonBody(request);
         if (!safeRoomMatch(room, body.roomCode)) {
           throw new RoomError("ROOM_NOT_FOUND", "房间不在。请向房主重新索取链接。", 404);
         }
-        const result = joinRoom(room, {
+        const result = await tracked(serialize(async () => {
+          const joined = joinRoom(room, {
           displayName: body.displayName,
           hostSecret: body.hostSecret,
-          resumeToken: body.resumeToken
-        });
+          resumeToken: body.resumeToken,
+          seatKey: body.seatKey
+          });
+          // Return the new credentials even if disk storage fails, so the browser can retry the same seat.
+          try { await persist(); } catch { /* persistence status is sent with the join acknowledgement */ }
+          return joined;
+        }));
         sendJson(request, response, 200, {
           ok: true,
           player: {
@@ -268,6 +376,9 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
             role: result.player.role
           },
           sessionToken: result.sessionToken,
+          recoveryKey: result.player.recoveryKey,
+          gameId: room.gameId,
+          persistence: { ...room.persistence },
           resumed: result.resumed
         });
         broadcastState();
@@ -296,14 +407,16 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
         streams.add(stream);
         setPlayerConnection(room, player.id, 1);
         writeEvent(stream, projectRoom(room, player.id));
+        for (const signal of room.cardRequests.values()) if (signal.expiresAt > Date.now()) writeEvent(stream, signal);
         broadcastState();
 
         request.once("close", () => removeStream(stream));
         return true;
       }
 
-      if (request.method === "POST" && requestUrl.pathname === "/api/message") {
-        const body = await readJsonBody(request);
+      if (request.method === "POST" && ["/api/message", "/api/game/restore"].includes(requestUrl.pathname)) {
+        const restoreRoute = requestUrl.pathname === "/api/game/restore";
+        const body = await readJsonBody(request, restoreRoute ? 12 * 1_048_576 : 1_048_576);
         if (!safeRoomMatch(room, body.roomCode)) {
           throw new RoomError("ROOM_NOT_FOUND", "房间不在。", 404);
         }
@@ -313,10 +426,11 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
         if (!message || typeof message.type !== "string") {
           throw new RoomError("INVALID_MESSAGE", "无法识别这次操作。");
         }
+        if (restoreRoute && (message.type !== "command" || message.command?.type !== "restore-game")) throw new RoomError("INVALID_COMMAND", "这个入口仅接受完整对局存档。");
 
         if (message.type === "cursor") {
           const now = Date.now();
-          if (now - (lastCursorAt.get(player.id) || 0) >= 36) {
+          if (now - (lastCursorAt.get(player.id) || 0) >= 70) {
             lastCursorAt.set(player.id, now);
             const x = Number(message.x);
             const y = Number(message.y);
@@ -328,7 +442,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
                 color: player.color,
                 x: clampWorld(x, "x"),
                 y: clampWorld(y, "y"),
-                drag: sanitizeDragPreview(room, player, message.drag)
+                drag: endedDrags.has(`${player.id}:${message.drag?.dragId}`) ? null : sanitizeDragPreview(room, player, message.drag, stackCache)
               };
               for (const stream of streams) {
                 if (stream.playerId !== player.id) writeEvent(stream, payload);
@@ -346,10 +460,22 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
         }
 
         if (message.type === "drag-end") {
+          const dragId = typeof message.dragId === "string" && /^[\w-]{1,80}$/.test(message.dragId) ? message.dragId : null;
+          if (dragId) endedDrags.set(`${player.id}:${dragId}`, Date.now());
+          if (endedDrags.size > 256) endedDrags.delete(endedDrags.keys().next().value);
           for (const stream of streams) {
-            if (stream.playerId !== player.id) writeEvent(stream, { type: "drag-end", playerId: player.id });
+            if (stream.playerId !== player.id) writeEvent(stream, { type: "drag-end", playerId: player.id, ...(dragId ? { dragId } : {}) });
           }
           sendJson(request, response, 200, { ok: true });
+          return true;
+        }
+
+        if (message.type === "card-request" || message.type === "card-request-end") {
+          const signal = message.type === "card-request"
+            ? requestPrivateCards(room, player.id, message.cardIds)
+            : cancelPrivateCardRequest(room, player.id);
+          for (const stream of streams) writeEvent(stream, signal);
+          sendJson(request, response, 200, { ok: true, signal });
           return true;
         }
 
@@ -387,35 +513,8 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
         }
 
         if (message.type === "command") {
-          const playerIdsBeforeCommand = new Set(room.players.keys());
-          let createdResource;
-          if (["replace-pack", "add-pack"].includes(message.command?.type)) {
-            if (typeof loadPack !== "function") {
-              throw new RoomError("PACK_NOT_AVAILABLE", "这个房间没有可更换的牌盒。", 404);
-            }
-            const packId = String(message.command.packId || "").slice(0, 40);
-            const pack = await loadPack(packId);
-            if (message.command.type === "add-pack") createdResource = { type: "deck", id: addRoomPack(room, player.id, pack, message.command) };
-            else replaceRoomPack(room, player.id, pack);
-          } else if (message.command?.type === "import-pack") {
-            if (player.role !== "host") throw new RoomError("HOST_ONLY", "只有房主可以导入牌盒。", 403);
-            const pack = validatePortablePack(message.command.pack);
-            createdResource = { type: "deck", id: addRoomPack(room, player.id, pack, message.command) };
-          } else if (message.command?.type === "restore-scene") {
-            restoreRoomScene(room, player.id, message.command.scene);
-          } else {
-            createdResource = applyCommand(room, player.id, message.command)?.createdResource;
-          }
-          for (const playerId of playerIdsBeforeCommand) {
-            if (!room.players.has(playerId)) broadcastCursorLeave(playerId);
-          }
-          if (message.command?.type === "leave-seat") {
-            sendJson(request, response, 200, { ok: true, revision: room.revision });
-            broadcastState();
-            return true;
-          }
-          broadcastState();
-          sendJson(request, response, 200, { ok: true, revision: room.revision, state: projectRoom(room, player.id), ...(createdResource ? { createdResource } : {}) });
+          if (closing) throw new RoomError("ROOM_CLOSING", "房主正在保存并关闭这桌，请稍后续局。", 503);
+          sendJson(request, response, 200, await tracked(executeCommand(player.id, message)));
           return true;
         }
 
@@ -436,6 +535,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
   };
 
   const heartbeat = setInterval(() => {
+    for (const [id, at] of endedDrags) if (at < Date.now() - 15000) endedDrags.delete(id);
     const stale = [];
     for (const stream of streams) {
       if (stream.closed || stream.response.destroyed) stale.push(stream);
@@ -455,6 +555,11 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null } 
     handle,
     get streamCount() {
       return streams.size;
+    },
+    async flush() {
+      closing = true;
+      while (operations.size) await Promise.allSettled([...operations]);
+      await commandQueue.catch(() => {});
     },
     close() {
       clearInterval(heartbeat);

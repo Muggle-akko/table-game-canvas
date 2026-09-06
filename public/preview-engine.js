@@ -34,7 +34,7 @@
     cards.forEach((card, index) => {
       card.id = `card_demo_${index + 1}`;
       if (!empty && index < 3) Object.assign(card, {
-        zone: index < 2 ? "hand" : "public", ownerId: index === 1 ? "player_b" : "player_a",
+        zone: index < 2 ? "hand" : "public", ownerId: index < 2 ? index === 1 ? "player_b" : "player_a" : null,
         x: index === 2 ? 650 : null, y: index === 2 ? 390 : null,
         rotation: index === 2 ? -4 : 0, faceUp: index === 2, z: index === 2 ? 3 : 0,
         handOrder: index < 2 ? index + 1 : 0
@@ -52,6 +52,10 @@
     });
     room.updatedAt = now;
     room.history = [];
+    return modelForRoom(room);
+  }
+
+  function modelForRoom(room) {
     const model = { engineRoom: room };
     for (const key of ["cards", "tokens", "players", "objects"]) {
       Object.defineProperty(model, key, {
@@ -63,8 +67,19 @@
       Object.defineProperty(model, key, { get: () => room[key], set: (value) => { room[key] = value; } });
     }
     Object.defineProperty(model, "undo", { get: () => room.undoStack });
-    Object.defineProperty(model, "room", { get: () => core.projectRoom(room, "player_a").room });
+    Object.defineProperty(model, "room", { get: () => core.projectRoom(room, [...room.players.values()].find((player) => player.role === "host").id).room });
     return model;
+  }
+
+  function restoreModel(checkpoint, { shareUrl = "" } = {}) {
+    if (checkpoint?.code !== "PREVIEW") throw new core.RoomError("INVALID_PREVIEW", "这不是本机试玩的自动存档。");
+    const room = core.roomFromCheckpoint(checkpoint);
+    if (![...room.players.values()].some((player) => player.role === "host")) throw new core.RoomError("INVALID_PREVIEW", "试玩存档缺少房主席位。");
+    room.sessions.clear();
+    for (const player of room.players.values()) player.connections = 1;
+    room.shareUrl = shareUrl;
+    room.packOptions = builtinPacks.map((entry) => ({ id: entry.id, name: entry.name, cardCount: entry.cards.length }));
+    return modelForRoom(room);
   }
 
   function project(model, viewerId, now = Date.now()) {
@@ -81,10 +96,14 @@
       core.validatePortablePack(command.pack);
       createdResource = { type: "deck", id: core.addRoomPack(room, viewerId, command.pack, command) };
     } else if (command.type === "restore-scene") core.restoreRoomScene(room, viewerId, command.scene);
+    else if (command.type === "restore-game") {
+      core.restoreRoomGame(room, viewerId, command.game);
+      for (const player of room.players.values()) player.connections = 1;
+    }
     else createdResource = core.applyCommand(room, viewerId, command)?.createdResource;
     const state = project(model, viewerId, now);
     return withReceipt ? { ok: true, revision: state.revision, state, ...(createdResource ? { createdResource } : {}) } : state;
   }
 
-  root.ParlorPreview = Object.freeze({ createModel, project, applyCommand, PreviewError: core.RoomError });
+  root.ParlorPreview = Object.freeze({ createModel, restoreModel, project, applyCommand, PreviewError: core.RoomError });
 })(typeof window !== "undefined" ? window : globalThis);
