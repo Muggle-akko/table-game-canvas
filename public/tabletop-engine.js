@@ -891,7 +891,7 @@ function objectDropPoint(command, object) {
 }
 
 function applyResourceCommand(room, actor, command) {
-  const commit = (label) => { addHistory(room, actor, label); touch(room); return true; };
+  const commit = (label, createdResource) => { addHistory(room, actor, label); touch(room); return createdResource ? { createdResource } : true; };
   if (command.type === "save-template") {
     if (room.templates.size >= 40) throw new RoomError("LIBRARY_FULL", "本桌最多保存 40 件资源，先移除一些再保存。", 409);
     const { resource } = requireControllableResource(room, actor, command.resourceType, command.resourceId);
@@ -929,7 +929,7 @@ function applyResourceCommand(room, actor, command) {
       copy.homeX = copy.x; copy.homeY = copy.y;
       room.tokens.set(copy.id, copy);
     } else room.objects.set(copy.id, copy);
-    return commit(`取出了收藏「${template.label}」`);
+    return commit(`取出了收藏「${template.label}」`, { type: template.type, id: copy.id });
   }
   if (command.type === "delete-template") {
     const template = room.templates.get(String(command.templateId));
@@ -956,7 +956,7 @@ function applyResourceCommand(room, actor, command) {
       Object.assign(object, { key: preset.id, homeX: point.x, homeY: point.y });
       room.tokens.set(id, object);
     } else room.objects.set(id, object);
-    return commit(`拿出了「${preset.label}」`);
+    return commit(`拿出了「${preset.label}」`, { type: preset.kind === "token" ? "token" : "object", id });
   }
 
   if (["move-resource", "lock-resource", "delete-resource", "duplicate-resource", "edit-resource", "roll-resource", "adjust-resource"].includes(command.type)) {
@@ -1030,7 +1030,7 @@ function applyResourceCommand(room, actor, command) {
       if (type === "card" && copy.zone === "hand") { copy.handOrder = room.nextHandOrder++; copy.x = null; copy.y = null; }
       if (type === "token") { copy.homeX = copy.x; copy.homeY = copy.y; }
       map.set(copy.id, copy);
-      return commit(`复制了「${resource.label || "卡牌"}」`);
+      return commit(`复制了「${resource.label || "卡牌"}」`, { type, id: copy.id });
     }
   }
 
@@ -1094,7 +1094,8 @@ function applyCommand(room, playerId, command) {
     throw new RoomError("INVALID_COMMAND", "无法识别这次操作。");
   }
 
-  if (applyResourceCommand(room, actor, command)) return;
+  const resourceResult = applyResourceCommand(room, actor, command);
+  if (resourceResult) return resourceResult === true ? undefined : resourceResult;
 
   if (command.type === "chat") {
     const text = String(command.text ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim();

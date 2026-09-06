@@ -309,6 +309,10 @@ kbd { font: 11px/1.5 var(--body); border: 1px solid currentColor; border-radius:
 .asset-copy small { display: block; color: #647360; font-size: 9px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; margin-top: 3px; }
 .asset-add { position: absolute; right: 0; bottom: 13px; display: grid; place-items: center; width: 22px; height: 24px; border-radius: 4px; background: #dce4d0; }
 .asset-add svg { width: 14px; height: 14px; }
+.asset-item[aria-busy="true"] .asset-preview { border-color: #8ca078; }
+.asset-add[data-pending-count] { color: #304522; background: #c7d7b1; font-variant-numeric: tabular-nums; }
+.asset-add[data-pending-count] svg { display: none; }
+.asset-add[data-pending-count]::after { content: attr(data-pending-count); font-size: 10px; font-weight: 600; }
 .library-footer { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-top: 1px solid var(--paper-line); flex-shrink: 0; margin-top: auto; }
 .library-footer button { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 600; }
 .library-footer button svg { width: 16px; height: 16px; }

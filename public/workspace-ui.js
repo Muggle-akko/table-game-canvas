@@ -20,7 +20,8 @@
     let category = "all", importedPacks = [], scenes = [], favorites = vault.favorites();
     let librarySignature = "", locationsSignature = "", handSignature = "", chatSignature = "";
     let initializedRoom = false, openAux = null, returnFocus = null, editorId = null, saving = false;
-    let libraryDrag = null, lastDragAt = 0, spawnNumber = 0, pendingSpawn = null, seenMessages = new Set();
+    let libraryDrag = null, lastDragAt = 0, spawnNumber = 0, spawning = false, seenMessages = new Set();
+    const spawnQueue = [], pendingAssets = new Map();
     let mapBounds = { x: -200, y: -200, width: 2200, height: 1500 };
     const panels = { world: $("world-panel"), chat: $("chat-panel"), saves: $("saves-panel") };
     const auxBackdrop = button("", "aux-backdrop is-hidden");
@@ -43,7 +44,7 @@
       }));
       const objects = catalog.map((resource) => ({ key: resource.id, type: "object", id: resource.id, label: resource.label, description: resource.description, category: resource.kind === "mat" ? "boards" : "objects", resource }));
       const saved = (ui.app.state?.templates || []).map((template) => ({
-        key: template.id, type: "saved", id: template.id, label: template.label, description: `${template.count} 件 · 同桌收藏`, category: "favorites", kind: template.kind, canDelete: template.canDelete
+        key: template.id, type: "saved", id: template.id, label: template.label, description: `${template.count} ${template.kind === "deck" ? "张" : "件"} · 同桌收藏`, category: "favorites", kind: template.kind, count: template.count, unit: template.kind === "deck" ? "张" : "件", canDelete: template.canDelete
       }));
       return [...builtin, ...local, ...objects, ...saved];
     }
@@ -135,7 +136,7 @@
         preview.replaceChildren(thumbnail(entry));
         preview.title = `${entry.label} · ${entry.description}`;
         const copy = el("div", "asset-copy"); copy.append(el("strong", "", entry.label));
-        if (entry.count !== undefined) copy.append(el("small", "", `${entry.count} ${entry.type === "saved" ? "件" : "张"}${entry.type === "import" ? " · 导入" : ""}`));
+        if (entry.count !== undefined) copy.append(el("small", "", `${entry.count} ${entry.unit || "张"}${entry.type === "import" ? " · 导入" : ""}`));
         const add = button("", "asset-add", "plus"); add.dataset.addAsset = entry.key; add.setAttribute("aria-label", `添加${entry.label}`);
         const disabled = !ui.app.connectionOpen || (entry.type === "import" && ui.app.state.you.role !== "host");
         add.disabled = disabled; preview.disabled = disabled;
@@ -159,6 +160,7 @@
         const empty = el("div", "library-empty"); empty.append(icon("package"), el("strong", "", term ? "没找到这件物品" : "暂无收藏")); nodes.push(empty);
       }
       ui.elements.packLibrary.replaceChildren(...nodes);
+      renderPendingAssets();
       $("library-total").textContent = String(all.length);
       $("import-pack").disabled = !ui.app.connectionOpen || ui.app.state.you.role !== "host";
       $("import-pack").title = ui.app.state.you.role === "host" ? "导入 JSON 牌盒" : "由房主导入牌盒";
@@ -173,17 +175,74 @@
       return { x: point.x - (size.width || 94) / 2 + (spawnNumber % 4) * 32, y: point.y - (size.height || 138) / 2 + (Math.floor(spawnNumber / 4) % 3) * 24 };
     }
 
-    async function addAsset(entry, point = placement(entry)) {
-      if (!entry || !ui.app.state) return;
-      pendingSpawn = new Set([...(ui.app.state.decks || []), ...(ui.app.state.objects || []), ...(ui.app.state.tokens || [])].map((item) => item.id));
+    function renderPendingAssets() {
+      for (const node of ui.elements.packLibrary.children) {
+        const count = pendingAssets.get(node.dataset.libraryKey) || 0;
+        const add = node.querySelector(".asset-add");
+        if (!add) continue;
+        const label = node.querySelector(".asset-copy strong").textContent;
+        node.setAttribute("aria-busy", String(count > 0));
+        if (count) add.dataset.pendingCount = String(count);
+        else delete add.dataset.pendingCount;
+        add.title = count ? `${count} 件正在添加，点击继续取用` : `添加${label}`;
+        add.setAttribute("aria-label", count ? `继续添加${label}，${count} 件等待完成` : `添加${label}`);
+      }
+    }
+
+    const sameSpawnContext = (request) => ui.app.state?.you.id === request.playerId && ui.app.state?.room.code === request.roomCode;
+
+    async function drainSpawns() {
+      if (spawning) return;
+      spawning = true;
+      let cancellationNotified = false;
+      try {
+        while (spawnQueue.length) {
+          const request = spawnQueue.shift();
+          let completed = false;
+          try {
+            if (!ui.app.connectionOpen || !sameSpawnContext(request)) {
+              if (!cancellationNotified) { ui.toast("未发送的资源取用已取消，请重新取用。"); cancellationNotified = true; }
+              continue;
+            }
+            const receipt = await ui.sendCommand(request.command, { withReceipt: true });
+            completed = Boolean(receipt);
+            if (receipt && sameSpawnContext(request)) {
+              const created = receipt.createdResource;
+              const resources = { deck: ui.app.state.decks, object: ui.app.state.objects, token: ui.app.state.tokens }[created?.type];
+              const canSelect = request.intent === ui.app.selectionIntent && !ui.app.drag && !ui.app.pan && !ui.app.touchNavigation && !ui.app.handTouch;
+              if (canSelect && Array.isArray(resources) && resources.some((item) => item.id === created.id)) {
+                ui.selectResource(created.type, created.id, { preserveIntent: true });
+                if (innerWidth < 760 && ui.elements.libraryPanel.classList.contains("is-open")) ui.hideSidePanels({ returnFocus: false });
+              }
+              ui.toast(`「${request.entry.label}」已放上桌`);
+            }
+          } catch (error) { handleError(error); }
+          finally {
+            const remaining = (pendingAssets.get(request.entry.key) || 1) - 1;
+            if (remaining) pendingAssets.set(request.entry.key, remaining);
+            else pendingAssets.delete(request.entry.key);
+            renderPendingAssets();
+            request.resolve(completed);
+          }
+        }
+      } finally { spawning = false; }
+    }
+
+    async function addAsset(entry, point) {
+      if (!entry || !ui.app.state) return false;
+      if (!ui.app.connectionOpen) { ui.toast("正在连接牌桌，请稍后再取用。"); return false; }
       const command = entry.type === "pack" ? { type: "add-pack", packId: entry.id }
         : entry.type === "import" ? { type: "import-pack", pack: entry.pack }
           : entry.type === "saved" ? { type: "spawn-template", templateId: entry.id } : { type: "spawn-resource", resourceId: entry.id };
-      if (await ui.sendCommand({ ...command, ...point })) {
-        spawnNumber++;
-        if (innerWidth < 760) ui.hideSidePanels({ returnFocus: false });
-        ui.toast(`「${entry.label}」已放上桌`);
-      } else pendingSpawn = null;
+      const position = point || placement(entry);
+      spawnNumber++;
+      const request = { entry, command: { ...command, ...position }, playerId: ui.app.state.you.id, roomCode: ui.app.state.room.code, intent: ++ui.app.selectionIntent };
+      pendingAssets.set(entry.key, (pendingAssets.get(entry.key) || 0) + 1);
+      renderPendingAssets();
+      return new Promise((resolve) => {
+        spawnQueue.push({ ...request, resolve });
+        void drainSpawns();
+      });
     }
 
     function renderObjects() {
@@ -271,6 +330,7 @@
     }
 
     function toggleHand() {
+      ui.app.selectionIntent++;
       const open = $("hand-drawer").classList.toggle("is-hidden") === false;
       $("open-hand").setAttribute("aria-expanded", String(open));
       if (open) $("hand-cards").querySelector("[tabindex]")?.focus({ preventScroll: true });
@@ -319,6 +379,7 @@
       if (restoreFocus) returnFocus?.focus({ preventScroll: true }); returnFocus = null;
     }
     function showPanel(name) {
+      ui.app.selectionIntent++;
       if (name === openAux) { closePanel(); return; }
       closePanel(); ui.hideSidePanels({ returnFocus: false }); returnFocus = document.activeElement;
       openAux = name; panels[name].classList.add("is-open"); panels[name].setAttribute("aria-hidden", "false");
@@ -408,10 +469,6 @@
       $("presence-select").disabled = !ui.app.connectionOpen;
       $("chat-input").disabled = !ui.app.connectionOpen;
       $("presence-select").value = state.players.find((player) => player.id === state.you.id)?.status || "在桌边";
-      if (pendingSpawn) {
-        const fresh = [...(state.decks || []).map((item) => ({ item, type: "deck" })), ...(state.objects || []).map((item) => ({ item, type: "object" })), ...(state.tokens || []).map((item) => ({ item, type: "token" }))].find(({ item }) => !pendingSpawn.has(item.id));
-        if (fresh) { pendingSpawn = null; ui.selectResource(fresh.type, fresh.item.id); }
-      }
       if (!initializedRoom) {
         initializedRoom = true;
         guarded(refreshVault);
@@ -431,9 +488,10 @@
       surface.append(die, note);
     }
 
-    $("library-search").addEventListener("input", () => renderLibrary());
+    $("library-search").addEventListener("input", () => { ui.app.selectionIntent++; renderLibrary(); });
     $("library-tabs").addEventListener("click", (event) => {
       const selected = event.target.closest("[data-category]"); if (!selected) return; category = selected.dataset.category;
+      ui.app.selectionIntent++;
       for (const item of $("library-tabs").children) { item.classList.toggle("is-active", item === selected); item.setAttribute("aria-pressed", String(item === selected)); }
       renderLibrary();
     });

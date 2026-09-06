@@ -20,6 +20,22 @@ for (const [mode, core] of [["server", serverCore], ["browser", browserCore]]) {
     return { room, host, guest, command, state, spawn };
   };
 
+  test(`${mode}: creation receipts identify the exact object, token, copy and template instance`, () => {
+    const { command, state } = setup();
+    const created = command({ type: "spawn-resource", resourceId: "note", x: 1000, y: 500 }).createdResource;
+    assert.deepEqual(plain(created), { type: "object", id: state().objects.at(-1).id });
+    const token = command({ type: "spawn-resource", resourceId: "token-red", x: 1100, y: 500 }).createdResource;
+    assert.equal(token.type, "token");
+    assert.ok(state().tokens.some((item) => item.id === token.id));
+    const copy = command({ type: "duplicate-resource", resourceType: "object", resourceId: created.id }).createdResource;
+    assert.notEqual(copy.id, created.id);
+    assert.equal(copy.id, state().objects.at(-1).id);
+    command({ type: "save-template", resourceType: "deck", resourceId: "main" });
+    const saved = command({ type: "spawn-template", templateId: state().templates[0].id, x: 1300, y: 600 }).createdResource;
+    assert.deepEqual(plain(saved), { type: "deck", id: state().decks.at(-1).id });
+    assert.deepEqual(Object.keys(saved).sort(), ["id", "type"], "receipts contain no private card definitions");
+  });
+
   test(`${mode}: independent decks retain their backs, hands, and source when collected`, () => {
     const { room, host, guest, command, state } = setup();
     command({ type: "draw" });

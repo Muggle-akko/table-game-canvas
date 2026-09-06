@@ -883,12 +883,12 @@ test("supports a separately deployed frontend without exposing private room stat
   }
 });
 
-async function resourceTransportFixture() {
+async function resourceTransportFixture(loadPack) {
   const room = createRoom({ code: "BOX-303", hostSecret: "host-secret", pack, randomizeDeck: false });
-  const transport = createRoomTransport(room, { loadPack: async (id) => {
+  const transport = createRoomTransport(room, { loadPack: loadPack || (async (id) => {
     if (id === unoPack.id) return unoPack;
     throw new Error("Unexpected pack request");
-  } });
+  }) });
   const join = async (body) => (await call(transport, { method: "POST", url: "/api/join", body: { roomCode: room.code, ...body } })).response.json();
   const host = await join({ hostSecret: "host-secret" }), guest = await join({ displayName: "朋友" });
   const message = (who, value) => call(transport, { method: "POST", url: "/api/message", body: messageBody(room.code, who.sessionToken, value) });
@@ -901,6 +901,24 @@ async function resourceTransportFixture() {
   const guestStream = await call(transport, { url: `/api/events?room=${room.code}&session=${guest.sessionToken}` });
   return { room, transport, host, guest, hostStream, guestStream, message, command };
 }
+
+test("delayed pack loading returns its own creation receipt after a different player's spawn", async () => {
+  let resolvePack;
+  const waitingPack = new Promise((resolve) => { resolvePack = resolve; });
+  const f = await resourceTransportFixture(() => waitingPack);
+  try {
+    const pending = f.command(f.guest, { type: "add-pack", packId: "uno", x: 1400, y: 600 });
+    const intervening = await f.command(f.host, { type: "spawn-resource", resourceId: "note", x: 1000, y: 500 });
+    resolvePack(unoPack);
+    const added = await pending;
+    assert.deepEqual(intervening.createdResource, { type: "object", id: intervening.state.objects.at(-1).id });
+    assert.deepEqual(added.createdResource, { type: "deck", id: added.state.decks.at(-1).id });
+    assert.notEqual(added.createdResource.id, intervening.createdResource.id);
+    assert.equal(added.state.you.id, f.guest.player.id);
+    assert.deepEqual(Object.keys(added.createdResource).sort(), ["id", "type"]);
+    assert.equal(JSON.stringify(added).includes(unoPack.cards[0].label), false);
+  } finally { f.transport.close(); }
+});
 
 test("multiple packs synchronize with private command receipts and containers hide both objects and cards", async () => {
   const f = await resourceTransportFixture();

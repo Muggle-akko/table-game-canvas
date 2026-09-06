@@ -445,6 +445,7 @@ function syncPreviewState(viewerId = app.state?.you?.id || "player_a") {
 
 function switchPreviewRole() {
   if (!previewMode || !app.state) return;
+  app.selectionIntent++;
   const nextViewerId = app.state.you.id === "player_a" ? "player_b" : "player_a";
   app.selection = null;
   app.selectionTransferOpen = false;
