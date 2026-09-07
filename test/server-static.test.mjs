@@ -42,3 +42,18 @@ test("rejects malformed or escaping static paths without throwing", async () => 
   assert.equal(escaping.statusCode, 403);
   assert.equal(escaping.body.toString("utf8"), "Forbidden");
 });
+
+test("entry pages reference current client assets and runtime files require cache revalidation", async () => {
+  const response = new MockResponse();
+  await serveStatic(response, "/");
+  const html = response.body.toString("utf8");
+  const assets = [...html.matchAll(/(?:src|href)="(\.\/[^\"]+\.(?:js|css)\?v=[a-f0-9]{16})"/g)].map((match) => match[1]);
+  assert.equal(assets.length, 12);
+  assert.equal(response.headers["Cache-Control"], "no-cache");
+  for (const asset of assets) {
+    const file = new MockResponse();
+    await serveStatic(file, new URL(asset, "https://table.example/").pathname);
+    assert.equal(file.statusCode, 200, `${asset} should be served`);
+    assert.equal(file.headers["Cache-Control"], "no-cache");
+  }
+});

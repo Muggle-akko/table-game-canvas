@@ -9,6 +9,7 @@ import { loadRoomAsset, validatePackAssets } from "./room-assets.mjs";
 import { createRoomTransport } from "./room-transport.mjs";
 import { createRoomPersistence, latestRoomPath, readRoomCheckpoint } from "./room-persistence.mjs";
 import { findCloudflared, startQuickTunnel } from "./tunnel.mjs";
+import { versionClientHtml } from "./client-assets.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const root = resolve(dirname(modulePath), "..");
@@ -141,10 +142,12 @@ export async function serveStatic(response, pathname) {
   try {
     const fileStat = await stat(absolutePath);
     if (!fileStat.isFile()) throw new Error("not a file");
-    const bytes = await readFile(absolutePath);
+    const extension = extname(absolutePath);
+    let bytes = await readFile(absolutePath);
+    if (extension === ".html") bytes = Buffer.from(await versionClientHtml(bytes.toString("utf8"), publicDirectory));
     response.writeHead(200, {
-      "Content-Type": MIME_TYPES[extname(absolutePath)] || "application/octet-stream",
-      "Cache-Control": extname(absolutePath) === ".html" ? "no-cache" : "public, max-age=300",
+      "Content-Type": MIME_TYPES[extension] || "application/octet-stream",
+      "Cache-Control": [".html", ".js", ".css"].includes(extension) ? "no-cache" : "public, max-age=300",
       "Content-Security-Policy": "default-src 'self'; connect-src 'self' http: https:; img-src 'self' data: http: https:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'",
       "X-Content-Type-Options": "nosniff",
       "Referrer-Policy": "no-referrer"
@@ -296,8 +299,8 @@ async function main() {
       room.publicEndpoint = localBaseUrl;
       room.shareUrl = shareUrl.toString();
       console.log("本地开发房间已开启：");
-      console.log(`房主链接：${hostUrl}`);
-      console.log(`访客链接：${shareUrl}`);
+      console.log(`房间加入链接（发给朋友）：${shareUrl}`);
+      console.log(`房主链接（仅自己使用）：${hostUrl}`);
       console.log("按 Ctrl+C 关闭房间。\n");
     } else {
       console.log("正在建立 HTTPS 公网隧道，链接可用前不会开放房间……");
@@ -321,17 +324,15 @@ async function main() {
       }
 
       console.log("\n房间已开启，朋友无需安装或登录：");
-      console.log(`HTTPS 房间链接：${shareUrl}`);
+      console.log(`房间加入链接（发给朋友）：${shareUrl}`);
+      console.log(`房主链接（仅自己使用）：${hostUrl}`);
       console.log("按 Ctrl+C 关闭房间。\n");
 
       if (!options.noOpen) {
         const opened = await openBrowser(hostUrl.toString());
         if (!opened) {
-          console.warn("没有自动打开浏览器，请手动打开下面的房主专用链接：");
-          console.log(`房主专用链接：${hostUrl}`);
+          console.warn("没有自动打开浏览器，请手动打开上面的房主链接。");
         }
-      } else {
-        console.log(`房主专用链接：${hostUrl}`);
       }
 
       tunnel.child.once("exit", async (code, signal) => {

@@ -59,7 +59,7 @@ if [[ ! -x "$project_dir/.tools/cloudflared" ]]; then
   fi
 fi
 
-printf '\n正在铺桌。只有健康检查通过后才会显示邀请链接。\n'
+printf '\n正在铺桌。健康检查通过后，会同时显示房间加入链接和房主链接。\n'
 printf '保持这个窗口打开以供朋友连接；关闭后可从自动存档继续。\n\n'
 
 npm run room -- "${room_arguments[@]}"
