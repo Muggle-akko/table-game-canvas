@@ -22,7 +22,7 @@ import {
   validatePortablePack
 } from "./room-engine.mjs";
 import { RoomAssetError } from "./room-assets.mjs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 function corsHeaders(request) {
   return {
@@ -153,6 +153,8 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
   const lastCursorAt = new Map();
   const lastPingAt = new Map();
   const stackCache = new Map(), endedDrags = new Map();
+  const syncId = randomUUID(), signals = [], pollingSessions = new Map();
+  let signalSequence = 0;
   let nextPingId = 1;
   let commandQueue = Promise.resolve();
   const operations = new Set();
@@ -241,7 +243,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
       // A stale stream cannot outlive the room process.
     }
     if (announce) {
-      broadcastCursorLeave(stream.playerId);
+      if (!room.players.get(stream.playerId)?.connections) broadcastCursorLeave(stream.playerId);
       broadcastState();
     }
   };
@@ -261,9 +263,13 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
     }
   };
 
-  const broadcastCursorLeave = (playerId) => {
-    for (const stream of streams) writeEvent(stream, { type: "cursor-leave", playerId });
+  const broadcastSignal = (payload, exceptPlayerId = null) => {
+    signals.push({ sequence: ++signalSequence, at: Date.now(), payload, exceptPlayerId });
+    if (signals.length > 512) signals.splice(0, signals.length - 512);
+    for (const stream of streams) if (stream.playerId !== exceptPlayerId) writeEvent(stream, payload);
   };
+
+  const broadcastCursorLeave = (playerId) => broadcastSignal({ type: "cursor-leave", playerId });
 
   const handle = async (request, response) => {
     const requestUrl = new URL(request.url || "/", "http://room.local");
@@ -334,6 +340,32 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
         return true;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/sync") {
+        if (closing) throw new RoomError("ROOM_CLOSING", "房主正在保存并关闭这桌，请稍后续局。", 503);
+        if (!safeRoomMatch(room, requestUrl.searchParams.get("room"))) throw new RoomError("ROOM_NOT_FOUND", "房间不在。", 404);
+        const sessionToken = requestUrl.searchParams.get("session") || "";
+        const player = playerForSession(room, sessionToken);
+        if (!player) throw new RoomError("SESSION_EXPIRED", "玩家身份已失效，请重新加入。", 401);
+        if (!pollingSessions.has(sessionToken)) {
+          setPlayerConnection(room, player.id, 1);
+          broadcastState();
+        }
+        pollingSessions.set(sessionToken, { playerId: player.id, at: Date.now() });
+        const cursor = Number(requestUrl.searchParams.get("cursor"));
+        const reset = requestUrl.searchParams.get("sync") !== syncId || !Number.isSafeInteger(cursor) || cursor < 0 || cursor > signalSequence;
+        const pending = reset ? [] : signals.filter((signal) => signal.sequence > cursor
+          && signal.at > Date.now() - 15000 && signal.exceptPlayerId !== player.id);
+        // A slow connection needs only each player's latest pointer position.
+        const latestCursor = new Map(pending.filter(({ payload }) => payload.type === "cursor").map((signal) => [signal.payload.playerId, signal]));
+        const events = pending.filter((signal) => signal.payload.type !== "cursor" || latestCursor.get(signal.payload.playerId) === signal).map(({ payload }) => payload);
+        if (reset) for (const signal of room.cardRequests.values()) if (signal.expiresAt > Date.now()) events.push(signal);
+        const changed = reset || Number(requestUrl.searchParams.get("revision")) !== room.revision
+          || requestUrl.searchParams.get("epoch") !== room.epoch;
+        sendJson(request, response, 200, { type: "room-sync", sync: syncId, cursor: signalSequence, reset,
+          state: changed ? projectRoom(room, player.id) : null, events });
+        return true;
+      }
+
       if (request.method === "GET" && ["/api/save", "/api/game", "/api/state", "/api/seat"].includes(requestUrl.pathname)) {
         if (!safeRoomMatch(room, requestUrl.searchParams.get("room"))) throw new RoomError("ROOM_NOT_FOUND", "房间不在。", 404);
         const player = playerForSession(room, requestUrl.searchParams.get("session") || "");
@@ -383,6 +415,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
           recoveryKey: result.player.recoveryKey,
           gameId: room.gameId,
           persistence: { ...room.persistence },
+          state: projectRoom(room, result.player.id),
           resumed: result.resumed
         });
         broadcastState();
@@ -448,9 +481,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
                 y: clampWorld(y, "y"),
                 drag: endedDrags.has(`${player.id}:${message.drag?.dragId}`) ? null : sanitizeDragPreview(room, player, message.drag, stackCache)
               };
-              for (const stream of streams) {
-                if (stream.playerId !== player.id) writeEvent(stream, payload);
-              }
+              broadcastSignal(payload, player.id);
             }
           }
           sendJson(request, response, 200, { ok: true });
@@ -467,9 +498,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
           const dragId = typeof message.dragId === "string" && /^[\w-]{1,80}$/.test(message.dragId) ? message.dragId : null;
           if (dragId) endedDrags.set(`${player.id}:${dragId}`, Date.now());
           if (endedDrags.size > 256) endedDrags.delete(endedDrags.keys().next().value);
-          for (const stream of streams) {
-            if (stream.playerId !== player.id) writeEvent(stream, { type: "drag-end", playerId: player.id, ...(dragId ? { dragId } : {}) });
-          }
+          broadcastSignal({ type: "drag-end", playerId: player.id, ...(dragId ? { dragId } : {}) }, player.id);
           sendJson(request, response, 200, { ok: true });
           return true;
         }
@@ -478,7 +507,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
           const signal = message.type === "card-request"
             ? requestPrivateCards(room, player.id, message.cardIds)
             : cancelPrivateCardRequest(room, player.id);
-          for (const stream of streams) writeEvent(stream, signal);
+          broadcastSignal(signal);
           sendJson(request, response, 200, { ok: true, signal });
           return true;
         }
@@ -502,7 +531,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
               y: clampWorld(y, "y")
             };
             nextPingId += 1;
-            for (const stream of streams) writeEvent(stream, payload);
+            broadcastSignal(payload);
           }
           sendJson(request, response, 200, { ok: true });
           return true;
@@ -540,12 +569,22 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
 
   const heartbeat = setInterval(() => {
     for (const [id, at] of endedDrags) if (at < Date.now() - 15000) endedDrags.delete(id);
+    while (signals.length && signals[0].at < Date.now() - 15000) signals.shift();
+    for (const [session, polling] of pollingSessions) {
+      if (polling.at >= Date.now() - 30000 && room.players.has(polling.playerId)) continue;
+      pollingSessions.delete(session);
+      if (room.players.has(polling.playerId)) {
+        setPlayerConnection(room, polling.playerId, -1);
+        if (!room.players.get(polling.playerId).connections) broadcastCursorLeave(polling.playerId);
+        broadcastState();
+      }
+    }
     const stale = [];
     for (const stream of streams) {
       if (stream.closed || stream.response.destroyed) stale.push(stream);
       else {
         try {
-          stream.response.write(": keep-alive\n\n");
+          if (!writeEvent(stream, { type: "heartbeat" })) stale.push(stream);
         } catch {
           stale.push(stream);
         }
@@ -573,6 +612,9 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
         removeStream(stream, { announce: false });
       }
       streams.clear();
+      for (const { playerId } of pollingSessions.values()) if (room.players.has(playerId)) setPlayerConnection(room, playerId, -1);
+      pollingSessions.clear();
+      signals.length = 0;
     }
   };
 }

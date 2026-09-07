@@ -130,6 +130,15 @@ const app = {
   connectionOpen: false,
   reconnectAttempts: 0,
   reconnectTimer: null,
+  syncTimer: null,
+  syncRequest: null,
+  syncPolling: false,
+  syncCursor: 0,
+  syncId: null,
+  syncLegacy: false,
+  streamWatchdog: null,
+  streamRetryTimer: null,
+  streamFailures: 0,
   closingStream: false,
   terminalOffline: false,
   cameraInitialized: false,
@@ -599,6 +608,7 @@ async function joinRoom({ displayName = "", resumeToken = "", secret = "", seatK
 
   app.sessionToken = payload.sessionToken;
   app.player = payload.player;
+  app.syncCursor = 0; app.syncId = null; app.syncLegacy = false;
   storeSession(payload.sessionToken);
   const savedCamera = !app.cameraInitialized ? await recovery?.savedCamera(payload.gameId, payload.player.id) : null;
   recovery?.joined(payload);
@@ -618,7 +628,12 @@ async function joinRoom({ displayName = "", resumeToken = "", secret = "", seatK
   showRoom();
   if (savedCamera) restoreCamera(savedCamera.camera, savedCamera.viewport);
   updateIdentity(payload.player);
+  if (payload.state) {
+    app.connectionOpen = true;
+    receiveRoomState(payload.state, { initial: true });
+  }
   connectEvents();
+  if (payload.state) void recovery.restorePending();
 }
 
 async function initialize() {
@@ -744,143 +759,186 @@ function setConnectionState(status) {
     elements.reconnectLabel.textContent = "连接中断，桌面已保留。正在重连；房主重开后请使用新邀请链接。";
     label = "暂时没有连上房间";
     elements.reconnectBanner.classList.remove("is-hidden");
+  } else {
+    elements.reconnectLabel.textContent = "正在载入牌桌…";
+    elements.reconnectBanner.classList.remove("is-hidden");
   }
   elements.connectionDot.setAttribute("aria-label", label);
   elements.connectionDot.title = label;
 }
 
+function receiveRoomEvent(message, { initial = app.awaitingInitialState } = {}) {
+  if (message.type === "room-state") {
+    app.connectionOpen = true; app.reconnectAttempts = 0;
+    receiveRoomState(message, { initial });
+    app.awaitingInitialState = false;
+    setConnectionState("online");
+    if (initial) void recovery.restorePending();
+    return;
+  }
+
+  if (message.type === "cursor") {
+    app.remoteCursors.set(message.playerId, { ...message, seenAt: Date.now() });
+    if (message.drag) {
+      app.remoteDrags.set(message.playerId, {
+        ...message.drag,
+        ...(message.drag.sourceType === "stack" ? { cardIds: visibleStackForCard(message.drag.resourceId).map((card) => card.id) } : {}),
+        playerId: message.playerId,
+        name: message.name,
+        color: message.color,
+        seenAt: Date.now()
+      });
+    } else {
+      app.remoteDrags.delete(message.playerId);
+    }
+    renderCursors();
+    renderRemoteDrags();
+    return;
+  }
+
+  if (message.type === "cursor-leave") {
+    app.remoteCursors.delete(message.playerId);
+    app.remoteDrags.delete(message.playerId);
+    renderCursors();
+    renderRemoteDrags();
+    return;
+  }
+
+  if (message.type === "card-request" || message.type === "card-request-end") {
+    feedback?.receiveRequest(message);
+    return;
+  }
+
+  if (message.type === "drag-end") {
+    if (!message.dragId || app.remoteDrags.get(message.playerId)?.dragId === message.dragId) app.remoteDrags.delete(message.playerId);
+    renderRemoteDrags();
+    return;
+  }
+
+  if (message.type === "ping") {
+    showPing(message);
+    return;
+  }
+
+  if (message.type === "command-error") toast(message.message || "操作没有成功。", "error");
+}
+
+function stopStateSync() {
+  app.syncPolling = false;
+  clearTimeout(app.syncTimer);
+  app.syncTimer = null;
+}
+
+function queueStateSync(source, delay = 0) {
+  if (app.eventSource !== source || app.closingStream || app.terminalOffline || !app.sessionToken) return;
+  app.syncPolling = true;
+  clearTimeout(app.syncTimer);
+  app.syncTimer = window.setTimeout(() => syncRoom(source), delay);
+}
+
+async function syncRoom(source) {
+  if (app.eventSource !== source || !app.syncPolling || app.closingStream || app.syncRequest?.source === source) return;
+  const request = { source, session: app.sessionToken, startedAt: Date.now() };
+  app.syncRequest = request;
+  const current = () => app.eventSource === source && app.sessionToken === request.session && app.syncPolling && !app.closingStream;
+  try {
+    let payload;
+    if (!app.syncLegacy) {
+      const url = new URL(apiUrl("/api/sync"));
+      for (const [key, value] of Object.entries({ room: roomCode, session: app.sessionToken, revision: app.state?.revision ?? -1,
+        epoch: app.state?.room.epoch || "", sync: app.syncId || "", cursor: app.syncCursor })) url.searchParams.set(key, value);
+      try { payload = await fetchJson(url.toString()); }
+      catch (error) { if (error.status !== 404) throw error; app.syncLegacy = true; }
+    }
+    if (app.syncLegacy) payload = { state: await fetchCurrentState(), events: [] };
+    if (!current()) return;
+    const wasOffline = !app.connectionOpen;
+    app.connectionOpen = true;
+    app.reconnectAttempts = 0;
+    const restarted = app.syncId && payload.sync && app.syncId !== payload.sync;
+    if (payload.state) receiveRoomEvent(payload.state, { initial: Boolean(restarted) || app.awaitingInitialState });
+    for (const event of payload.events || []) receiveRoomEvent(event);
+    if (payload.sync) { app.syncId = payload.sync; app.syncCursor = payload.cursor; }
+    if (wasOffline || recovery.pendingCount) void recovery.restorePending();
+    setConnectionState("online"); renderTools(); workspace?.renderLibrary();
+    queueStateSync(source, Math.max(120, 1000 - (Date.now() - request.startedAt)));
+  } catch (error) {
+    if (!current()) return;
+    if (error.status === 401) {
+      const seat = await recovery.preferredSeat(app.state?.room.gameId || app.summary?.gameId);
+      if (!current()) return;
+      if (seat) {
+        try { await joinRoom({ seatKey: seat.key }); return; }
+        catch (resumeError) {
+          if (resumeError.status === 403) { app.closingStream = true; stopStateSync(); source.close(); app.connectionOpen = false; clearStoredSession(); showJoin(); elements.joinError.textContent = "原席位已被释放。请确认后重新入座，或粘贴新的续局口令。"; return; }
+        }
+      }
+    }
+    app.connectionOpen = false; cancelDrag(); clearCursorQueue();
+    setConnectionState("offline"); renderTools(); workspace?.render();
+    scheduleReconnect(source);
+  } finally {
+    if (app.syncRequest === request) app.syncRequest = null;
+  }
+}
+
+function watchEventStream(source, delay) {
+  clearTimeout(app.streamWatchdog);
+  app.streamWatchdog = window.setTimeout(() => {
+    if (app.eventSource !== source || app.closingStream) return;
+    source.close();
+    queueStateSync(source);
+    retryEventStream(source);
+  }, delay);
+}
+
+function retryEventStream(source) {
+  clearTimeout(app.streamRetryTimer);
+  const delay = Math.min(30000, 1200 * 2 ** Math.min(app.streamFailures++, 5));
+  app.streamRetryTimer = window.setTimeout(() => {
+    if (app.eventSource === source && !app.closingStream) connectEvents();
+  }, delay);
+}
+
 function connectEvents() {
   clearTimeout(app.reconnectTimer);
+  clearTimeout(app.streamRetryTimer);
+  stopStateSync();
   app.closingStream = false;
   app.eventSource?.close();
-  app.awaitingInitialState = true;
-  setConnectionState("connecting");
-
+  app.awaitingInitialState = !app.connectionOpen || !app.state;
+  setConnectionState(app.connectionOpen ? "online" : "connecting");
   const source = new EventSource(eventUrl());
   app.eventSource = source;
-
-  source.addEventListener("open", () => {
-    if (app.eventSource !== source) return;
-    setConnectionState(app.state ? "reconnecting" : "connecting");
-  });
-
   source.addEventListener("message", (event) => {
-    if (app.eventSource !== source) return;
+    if (app.eventSource !== source || app.closingStream) return;
     let message;
-    try {
-      message = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-
-    if (message.type === "room-state") {
-      const initial = app.awaitingInitialState;
-      app.connectionOpen = true; app.reconnectAttempts = 0;
-      receiveRoomState(message, { initial });
-      app.awaitingInitialState = false;
-      setConnectionState("online");
-      if (initial) void recovery.restorePending();
-      return;
-    }
-
-    if (message.type === "cursor") {
-      app.remoteCursors.set(message.playerId, { ...message, seenAt: Date.now() });
-      if (message.drag) {
-        app.remoteDrags.set(message.playerId, {
-          ...message.drag,
-          ...(message.drag.sourceType === "stack" ? { cardIds: visibleStackForCard(message.drag.resourceId).map((card) => card.id) } : {}),
-          playerId: message.playerId,
-          name: message.name,
-          color: message.color,
-          seenAt: Date.now()
-        });
-      } else {
-        app.remoteDrags.delete(message.playerId);
-      }
-      renderCursors();
-      renderRemoteDrags();
-      return;
-    }
-
-    if (message.type === "cursor-leave") {
-      app.remoteCursors.delete(message.playerId);
-      app.remoteDrags.delete(message.playerId);
-      renderCursors();
-      renderRemoteDrags();
-      return;
-    }
-
-    if (message.type === "card-request" || message.type === "card-request-end") {
-      feedback?.receiveRequest(message);
-      return;
-    }
-
-    if (message.type === "drag-end") {
-      if (!message.dragId || app.remoteDrags.get(message.playerId)?.dragId === message.dragId) app.remoteDrags.delete(message.playerId);
-      renderRemoteDrags();
-      return;
-    }
-
-    if (message.type === "ping") {
-      showPing(message);
-      return;
-    }
-
-    if (message.type === "command-error") toast(message.message || "操作没有成功。", "error");
+    try { message = JSON.parse(event.data); } catch { return; }
+    if (!message || typeof message.type !== "string") return;
+    app.streamFailures = 0;
+    stopStateSync();
+    clearTimeout(app.reconnectTimer);
+    watchEventStream(source, 26000);
+    receiveRoomEvent(message);
   });
-
   source.addEventListener("error", () => {
     if (app.eventSource !== source || app.closingStream) return;
-    // Quick Tunnel and EventSource may briefly reconnect while the room API remains healthy.
-    // Keep table actions available until repeated health checks prove the room is gone.
-    if (!app.state) app.connectionOpen = false;
-    setConnectionState(app.state ? "reconnecting" : "connecting");
-    renderTools();
-    scheduleReconnect(source);
+    source.close();
+    clearTimeout(app.streamWatchdog);
+    queueStateSync(source);
+    retryEventStream(source);
   });
+  // An event stream can remain CONNECTING forever behind a buffering proxy.
+  // Ordinary HTTP supplies both the first table and a bounded sync fallback.
+  queueStateSync(source);
+  watchEventStream(source, 4000);
 }
 
 function scheduleReconnect(source) {
-  if (app.terminalOffline || !app.sessionToken) return;
+  if (app.terminalOffline || app.closingStream || !app.sessionToken) return;
   app.reconnectAttempts += 1;
-  const delay = Math.min(15000, 600 * 2 ** Math.min(app.reconnectAttempts, 5));
   clearTimeout(app.reconnectTimer);
-  app.reconnectTimer = window.setTimeout(async () => {
-    try {
-      await probeRoom();
-      if (app.eventSource !== source) return;
-      const state = await fetchCurrentState();
-      if (app.eventSource !== source) return;
-      app.connectionOpen = true;
-      receiveRoomState(state, { initial: app.awaitingInitialState }); app.awaitingInitialState = false;
-      void recovery.restorePending();
-      if (source.readyState === EventSource.OPEN) {
-        app.connectionOpen = true;
-        app.reconnectAttempts = 0;
-        setConnectionState("online");
-        renderTools();
-      } else if (app.reconnectAttempts >= 2) {
-        source.close();
-        connectEvents();
-      } else {
-        scheduleReconnect(source);
-      }
-    } catch (error) {
-      if (app.eventSource !== source) return;
-      if (error.status === 401) {
-        const seat = await recovery.preferredSeat(app.state?.room.gameId || app.summary?.gameId);
-        if (seat) {
-          try { await joinRoom({ seatKey: seat.key }); return; }
-          catch (resumeError) {
-            if (resumeError.status === 403) { app.closingStream = true; source.close(); app.connectionOpen = false; clearStoredSession(); showJoin(); elements.joinError.textContent = "原席位已被释放。请确认后重新入座，或粘贴新的续局口令。"; return; }
-          }
-        }
-      }
-      app.connectionOpen = false; cancelDrag(); clearCursorQueue();
-      setConnectionState("offline"); renderTools(); workspace?.render();
-      scheduleReconnect(source);
-    }
-  }, delay);
+  app.reconnectTimer = window.setTimeout(() => queueStateSync(source), Math.min(15000, 600 * 2 ** Math.min(app.reconnectAttempts, 5)));
 }
 
 function updateIdentity(player) {
@@ -2764,6 +2822,7 @@ async function leaveCurrentSeat() {
 
   app.closingStream = true;
   clearTimeout(app.reconnectTimer);
+  clearTimeout(app.streamWatchdog); clearTimeout(app.streamRetryTimer); stopStateSync();
   app.eventSource?.close();
   app.eventSource = null;
   app.connectionOpen = false;
@@ -3293,6 +3352,7 @@ window.addEventListener("beforeunload", (event) => {
   if (previewRecovery?.hasUnsavedChanges()) { event.preventDefault(); event.returnValue = ""; }
   void previewRecovery?.flush();
   app.closingStream = true;
+  clearTimeout(app.reconnectTimer); clearTimeout(app.streamWatchdog); clearTimeout(app.streamRetryTimer); stopStateSync();
   clearCursorQueue();
   app.eventSource?.close();
 });

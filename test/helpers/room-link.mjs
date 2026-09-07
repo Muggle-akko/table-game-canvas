@@ -9,7 +9,7 @@ export function createRoomLink(room, options = {}) {
 
 function createClientLink(transport) {
   const sources = new Set(), commands = [], events = [], responses = [];
-  const link = { online: true, dropNextReceipt: false, commands, events, responses, transport,
+  const link = { online: true, stallEvents: false, dropNextReceipt: false, commands, events, responses, transport,
     createPeer: () => createClientLink(transport) };
   const request = (url, options = {}) => {
     const parsed = new URL(url), req = new EventEmitter();
@@ -46,6 +46,9 @@ function createClientLink(transport) {
       queueMicrotask(() => {
         if (this.closed) return;
         if (!link.online) this.emit("error", {});
+        else if (link.stallEvents) {
+          if (link.stallEvents === "open") { this.readyState = 1; this.emit("open", {}); }
+        }
         else void transport.handle(this.req, this.res);
       });
     }

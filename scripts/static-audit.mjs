@@ -99,11 +99,7 @@ assert.match(
   "the local pointer must render in its dedicated screen-space layer"
 );
 assert.match(styles, /\.local-cursor-root\s*\{[^}]*z-index:/s, "the local pointer layer must sit above the table world");
-assert.match(
-  app,
-  /setConnectionState\(app\.state \? "reconnecting" : "connecting"\)/,
-  "a transient event-stream error must be presented as recovery, not immediate room loss"
-);
+// Stream recovery is verified through production events in client-cursors and client-sync tests.
 assert.equal(
   app.includes("与房主断开，暂时不能标记位置"),
   false,
