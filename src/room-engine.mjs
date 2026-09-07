@@ -277,20 +277,35 @@ export function publicStackForCard(room, cardId) {
   return cards;
 }
 
-export function tokenStackMembers(tokens, tokenId) {
+export function tokenStackIndex(tokens) {
   const candidates = [...tokens].filter((token) => !token.bagId);
-  const anchor = candidates.find((token) => token.id === tokenId);
-  if (!anchor) return [];
-  const collected = new Set([anchor.id]), pending = [anchor];
   const threshold = TABLE_GEOMETRY.tokenSize * 0.4;
-  while (pending.length) {
-    const current = pending.pop();
-    for (const token of candidates) {
-      if (collected.has(token.id) || Math.abs(token.x - current.x) > threshold || Math.abs(token.y - current.y) > threshold) continue;
-      collected.add(token.id); pending.push(token);
-    }
+  const buckets = new Map(), index = new Map();
+  for (const token of candidates) {
+    const key = `${Math.floor(token.x / threshold)}:${Math.floor(token.y / threshold)}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(token);
   }
-  return candidates.filter((token) => collected.has(token.id)).sort((a, b) => a.z - b.z);
+  for (const anchor of candidates) {
+    if (index.has(anchor.id)) continue;
+    const group = [anchor], pending = [anchor];
+    index.set(anchor.id, group);
+    while (pending.length) {
+      const current = pending.pop(), bx = Math.floor(current.x / threshold), by = Math.floor(current.y / threshold);
+      for (let x = bx - 1; x <= bx + 1; x++) for (let y = by - 1; y <= by + 1; y++) {
+        for (const token of buckets.get(`${x}:${y}`) || []) {
+          if (index.has(token.id) || Math.abs(token.x - current.x) > threshold || Math.abs(token.y - current.y) > threshold) continue;
+          index.set(token.id, group); group.push(token); pending.push(token);
+        }
+      }
+    }
+    group.sort((a, b) => a.z - b.z);
+  }
+  return index;
+}
+
+export function tokenStackMembers(tokens, tokenId) {
+  return tokenStackIndex(tokens).get(tokenId) || [];
 }
 
 function requireTokenStack(room, tokenId, multiple = false) {

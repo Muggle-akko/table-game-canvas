@@ -194,6 +194,8 @@ let stackState = null;
 let stackIndex = new Map();
 let tokenStackState = null;
 let tokenStackIndex = new Map();
+let tableIndexState = null;
+let tableIndex = new Map();
 
 const CURSOR_SEND_INTERVAL = 100;
 const CURSOR_REQUEST_TIMEOUT = 1800;
@@ -1016,11 +1018,17 @@ function makePlayerRow(player, you) {
 
 function renderPlayers() {
   const { players, you, room } = app.state;
+  const signature = JSON.stringify([players, you.id, room.maxPlayers, app.state.turn?.activePlayerId]);
+  if (elements.playerList.dataset.signature === signature) return;
+  elements.playerList.dataset.signature = signature;
   elements.playerCount.textContent = `${players.length}/${room.maxPlayers}`;
   elements.playerList.replaceChildren(...players.map((player) => makePlayerRow(player, you)));
 }
 
 function renderMobilePlayers() {
+  const signature = JSON.stringify([app.state.players, app.state.you.id, app.state.turn?.activePlayerId]);
+  if (elements.mobilePlayerStrip.dataset.signature === signature) return;
+  elements.mobilePlayerStrip.dataset.signature = signature;
   const label = document.createElement("span");
   label.className = "mobile-player-strip__label";
   label.textContent = `${app.state.players.length} 人`;
@@ -1085,12 +1093,7 @@ function visibleTokenStack(tokenId) {
   if (!app.state) return [];
   if (tokenStackState !== app.state) {
     tokenStackState = app.state;
-    tokenStackIndex = new Map();
-    for (const token of app.state.tokens || []) {
-      if (tokenStackIndex.has(token.id)) continue;
-      const stack = window.ParlorEngine.tokenStackMembers(app.state.tokens, token.id);
-      for (const member of stack) tokenStackIndex.set(member.id, stack);
-    }
+    tokenStackIndex = window.ParlorEngine.tokenStackIndex(app.state.tokens || []);
   }
   return tokenStackIndex.get(tokenId) || [];
 }
@@ -1123,8 +1126,14 @@ function selectedResource() {
 }
 
 function tableResource(ref) {
-  const values = ref.type === "card" ? app.state?.cards : ref.type === "deck" ? app.state?.decks : ref.type === "token" ? app.state?.tokens : ref.type === "object" ? app.state?.objects : [];
-  const value = values?.find((item) => item.id === ref.id);
+  if (tableIndexState !== app.state) {
+    tableIndexState = app.state;
+    tableIndex = new Map();
+    for (const [type, values] of [["card", app.state?.cards], ["deck", app.state?.decks], ["token", app.state?.tokens], ["object", app.state?.objects]]) {
+      for (const value of values || []) tableIndex.set(`${type}:${value.id}`, value);
+    }
+  }
+  const value = tableIndex.get(`${ref.type}:${ref.id}`);
   return value && (ref.type !== "card" || value.zone === "public") ? { type: ref.type, value } : null;
 }
 
@@ -1466,11 +1475,14 @@ function runSelectionAction(action) {
 
 function renderHandZones() {
   const { players, you, cards } = app.state;
-  app.handLayouts = calculateHandLayouts(players);
   const counts = new Map();
   for (const card of cards) {
     if (card.zone === "hand") counts.set(card.ownerId, (counts.get(card.ownerId) || 0) + 1);
   }
+  const signature = JSON.stringify([players.map(({ id, name, color, privateZone, seatIndex }) => [id, name, color, privateZone, seatIndex]), you.id, [...counts], app.state.turn?.activePlayerId, app.state.room.geometry]);
+  if (elements.handZones.dataset.signature === signature) return;
+  elements.handZones.dataset.signature = signature;
+  app.handLayouts = calculateHandLayouts(players);
 
   const nodes = players.map((player) => {
     const layout = app.handLayouts.get(player.id);
@@ -1661,6 +1673,7 @@ function makeCardNode(card, position, { ghost = false } = {}) {
     flip.append(phIcon(card.zone === "hand" ? card.faceUp ? "eye-slash" : "eye" : "arrows-counter-clockwise"));
     node.append(flip);
   }
+  node.dataset.baseTitle = node.title;
   return node;
 }
 
@@ -1677,11 +1690,12 @@ function appendLockIndicator(node, locked) {
 }
 
 function appendStackCount(node, count) {
-  const badge = document.createElement("span");
-  badge.className = "card-stack-count";
-  badge.textContent = String(count);
-  badge.title = `${count} 张牌堆 · 拖动整组，轻点操作`;
-  node.append(badge);
+  let badge = node.querySelector(".card-stack-count");
+  if (!badge) { badge = document.createElement("span"); badge.className = "card-stack-count"; node.append(badge); }
+  if (badge.textContent !== String(count)) {
+    badge.textContent = String(count);
+    badge.title = `${count} 张牌堆 · 拖动整组，轻点操作`;
+  }
 }
 
 function makeStackDragNode(cards, anchor) {
@@ -1858,17 +1872,15 @@ function renderCards() {
     node.dataset.signature = signature;
     node.style.left = `${position.x}px`; node.style.top = `${position.y}px`;
     node.style.transform = `rotate(${position.rotation || 0}deg)`; node.style.zIndex = String(20 + (position.z || 0));
-    node.classList.remove("is-stack-top");
-    node.querySelector(".card-stack-count")?.remove();
+    const stack = card.zone === "public" ? visibleStackForCard(card.id) : [];
+    const stackTop = stack.length >= 2 && stack.at(-1)?.id === card.id;
+    node.classList.toggle("is-stack-top", stackTop);
+    if (!stackTop) node.querySelector(".card-stack-count")?.remove();
+    node.title = stack.length >= 2 ? `${stack.length} 张牌堆 · 拖动整组，轻点操作` : node.dataset.baseTitle;
     node.setAttribute("aria-label", `${card.face?.label || "背面朝上的牌"}${card.zone === "hand" && card.faceUp ? "，已展示" : ""}${card.locked ? "，已锁定" : ""}`);
-    if (card.zone === "public") {
-      const stack = visibleStackForCard(card.id);
-      if (stack.length >= 2) node.title = `${stack.length} 张牌堆 · 拖动整组，轻点操作`;
-      if (stack.length >= 2 && stack.at(-1)?.id === card.id) {
-        node.classList.add("is-stack-top");
-        node.setAttribute("aria-label", `公共牌堆，${stack.length} 张${stack.some((entry) => entry.locked) ? "，含锁定的牌" : ""}`);
-        appendStackCount(node, stack.length);
-      }
+    if (stackTop) {
+      node.setAttribute("aria-label", `公共牌堆，${stack.length} 张${stack.some((entry) => entry.locked) ? "，含锁定的牌" : ""}`);
+      appendStackCount(node, stack.length);
     }
     const visibleSide = card.zone === "hand" && card.ownerId === app.state.you.id ? `hand:${card.faceUp ? "shown" : "hidden"}` : card.face ? "front" : "back";
     const previousSide = app.cardFaceStates.get(card.id);
@@ -1889,8 +1901,12 @@ function renderTokens() {
   for (const token of app.state.tokens || []) {
     ids.add(token.id);
     const stack = visibleTokenStack(token.id), top = stack.at(-1)?.id === token.id;
-    const signature = JSON.stringify([token, stack.length, top]), old = existing.get(token.id);
-    if (old?.dataset.signature === signature) continue;
+    const { x, y, z, ...visual } = token;
+    const signature = JSON.stringify([visual, stack.length, top, stack.some((member) => member.locked)]), old = existing.get(token.id);
+    if (old?.dataset.signature === signature) {
+      old.style.left = `${x}px`; old.style.top = `${y}px`; old.style.zIndex = String(35 + (z || 0));
+      continue;
+    }
     const node = makeTokenNode(token); node.dataset.signature = signature;
     if (stack.length > 1) {
       node.classList.add("is-token-stack");

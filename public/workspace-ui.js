@@ -260,8 +260,13 @@
       const current = new Set();
       for (const object of ui.app.state.objects || []) {
         current.add(object.id);
-        const signature = JSON.stringify([object, ui.app.connectionOpen]), old = existing.get(object.id);
-        if (old?.dataset.signature === signature) continue;
+        const { x, y, z, rotation, ...visual } = object;
+        const signature = JSON.stringify([visual, object.kind === "counter" && ui.app.connectionOpen]), old = existing.get(object.id);
+        if (old?.dataset.signature === signature) {
+          old.style.left = `${x}px`; old.style.top = `${y}px`;
+          old.style.transform = `rotate(${rotation || 0}deg)`; old.style.zIndex = String(object.kind === "mat" ? 1 : 40 + (z || 0));
+          continue;
+        }
         const node = makeObjectNode(object); node.dataset.signature = signature;
         if (old) {
           if (old.dataset.rollId !== String(object.rollId) && object.kind === "die") node.classList.add("just-rolled");
