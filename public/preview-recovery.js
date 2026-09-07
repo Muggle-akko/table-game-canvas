@@ -25,8 +25,8 @@
         generation = record.generation; status.savedAt = Number.isFinite(record.updatedAt) ? record.updatedAt : null;
         const camera = record.camera;
         const validCamera = camera && [camera.x, camera.y, camera.scale].every(Number.isFinite)
-          && Math.abs(camera.x) <= 100000 && Math.abs(camera.y) <= 100000 && camera.scale >= .1 && camera.scale <= 3;
-        return { model, viewerId: record.viewerId, camera: validCamera ? { ...camera } : null };
+          && Math.abs(camera.x) <= 100000 && Math.abs(camera.y) <= 100000 && camera.scale >= .015 && camera.scale <= 3;
+        return { model, viewerId: record.viewerId, camera: validCamera ? { ...camera } : null, viewport: record.viewport };
       } catch (error) {
         fork();
         status.error = error.message;
@@ -50,7 +50,8 @@
           status.pending = true; changed();
           try {
             const record = { id, format: "parlor.preview", version: 1, packId: ui.packId, updatedAt: Date.now(),
-              checkpoint: root.ParlorEngine.exportRoomCheckpoint(app.previewModel.engineRoom), viewerId: app.state.you.id, camera: { ...app.camera } };
+              checkpoint: root.ParlorEngine.exportRoomCheckpoint(app.previewModel.engineRoom), viewerId: app.state.you.id,
+              camera: { ...app.camera }, viewport: app.cameraViewport && { ...app.cameraViewport } };
             let saved;
             try { saved = await vault.commitPreview(record, generation); }
             catch (error) {

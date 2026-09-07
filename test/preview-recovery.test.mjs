@@ -39,6 +39,18 @@ test("preview refresh restores exact private cards, positions, poker decisions, 
   assert.equal((await saved(refreshed)).camera.x, 90, "backgrounding flushes the pending camera save");
 });
 
+test("preview recovery preserves the viewed center at a new size including wide-world overview scales", async () => {
+  const indexedDB = createLocalStoreDouble();
+  const original = await loadClient({ indexedDB, width: 1440, height: 900 });
+  original.vm("app.camera = { x: 330, y: 270, scale: .05 }; app.cameraTouched = true; applyCamera();");
+  await original.previewRecovery.flush();
+  const restored = await loadClient({ indexedDB, width: 320, height: 740 });
+  assert.equal(restored.app.camera.scale, .05);
+  assert.equal(restored.app.camera.x, 330 + (320 - 1440) / 2);
+  assert.equal(restored.app.camera.y, 270 + (740 - 900) / 2);
+  assert.equal(restored.app.state.room.gameId, original.app.state.room.gameId);
+});
+
 test("concurrent preview tabs save independent copies instead of overwriting each other's table", async () => {
   const indexedDB = createLocalStoreDouble(), first = await loadClient({ indexedDB });
   await first.previewRecovery.flush();

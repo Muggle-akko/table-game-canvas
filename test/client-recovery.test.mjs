@@ -59,6 +59,27 @@ test("offline refresh keeps the authorized table and camera visible and reconnec
   assert.equal(refreshed.app.state.cards[0].id, cardId);
 });
 
+test("online and offline reloads retain the same camera focus across viewport sizes", async (t) => {
+  const f = fixture(t), original = await f.client({ width: 1440, height: 900 });
+  original.vm("app.camera = { x: 123, y: -456, scale: .8 }; app.cameraTouched = true; applyCamera();");
+  await original.advanceTimers(500);
+  const center = (client) => {
+    const rect = client.$("viewport").getBoundingClientRect(), camera = client.app.camera;
+    return { x: (rect.width / 2 - camera.x) / camera.scale, y: (rect.height / 2 - camera.y) / camera.scale };
+  };
+  const expected = center(original);
+  const online = await f.client({ width: 390, height: 844, url: `https://table.example/?room=${f.room.code}` });
+  assert.equal(online.app.connectionOpen, true);
+  assert.equal(online.app.camera.scale, .8);
+  assert.deepEqual(center(online), expected);
+  await online.advanceTimers(500);
+  f.link.disconnect();
+  const offline = await f.client({ width: 320, height: 740, url: `https://table.example/?room=${f.room.code}` });
+  assert.equal(offline.app.connectionOpen, false);
+  assert.equal(offline.$("room-screen").classList.contains("is-hidden"), false);
+  assert.deepEqual(center(offline), expected);
+});
+
 test("undo rejects unknown old operations while an existing receipt still acknowledges without replay", async (t) => {
   const f = fixture(t), client = await f.client(), state = client.app.state;
   const request = async (message) => {

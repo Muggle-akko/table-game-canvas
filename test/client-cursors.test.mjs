@@ -119,6 +119,39 @@ async function roomFixture(t, wrapFetch = (fetch) => fetch) {
   return { room, link, host, guest: () => load(link.createPeer(), "fresh=1&autojoin=Guest") };
 }
 
+test("resizing keeps the viewed world point centered and cancels a drag without moving cards", async () => {
+  const client = await loadClient({ width: 1440, height: 900 });
+  const { app, $, document, dispatch } = client;
+  await dispatch($("zoom-in"), "click");
+  const center = () => {
+    const rect = $("viewport").getBoundingClientRect();
+    return { x: (rect.width / 2 - app.camera.x) / app.camera.scale, y: (rect.height / 2 - app.camera.y) / app.camera.scale };
+  };
+  const before = center(), scale = app.camera.scale, revision = app.state.revision;
+  client.context.innerWidth = 390;
+  Object.assign($("viewport").rect, { width: 390, height: 786 });
+  await dispatch(document.body, "resize");
+  closeTo(center().x, before.x); closeTo(center().y, before.y);
+  assert.equal(app.camera.scale, scale);
+  assert.equal($("zoom-value").textContent, `${Math.round(scale * 100)}%`);
+
+  const deck = app.state.decks.find((item) => item.id === "main"), node = document.querySelector('[data-deck-id="main"]');
+  const from = pointerFor(client, deck.x + 20, deck.y + 20), to = pointerFor(client, deck.x + 70, deck.y + 40);
+  await dispatch(node, "pointerdown", from);
+  await dispatch(node, "pointermove", to);
+  assert.equal(app.drag?.activated, true);
+  client.context.innerWidth = 320;
+  Object.assign($("viewport").rect, { width: 320, height: 682 });
+  await dispatch(document.body, "resize");
+  await dispatch(node, "pointerup", to);
+  assert.equal(app.drag, null);
+  assert.equal($("drag-root").children.length, 0);
+  assert.equal(app.state.revision, revision);
+  closeTo(center().x, before.x); closeTo(center().y, before.y);
+  await dispatch($("viewport"), "pointermove", { clientX: 200, clientY: 250 });
+  cursorAt(client, 200, 250);
+});
+
 test("a transient event-stream loss preserves cursor sending and table commands, then restores remote cursors", async (t) => {
   const { room, link, host, guest: loadGuest } = await roomFixture(t), guest = await loadGuest();
   const previousSource = host.app.eventSource, hostId = host.app.state.you.id;

@@ -135,6 +135,7 @@ const app = {
   cameraInitialized: false,
   cameraTouched: false,
   camera: { x: 0, y: 0, scale: 0.68 },
+  cameraViewport: null,
   pan: null,
   drag: null,
   dragHeartbeat: null,
@@ -476,7 +477,6 @@ async function startPreview() {
   const players = [...app.previewModel.engineRoom.players.values()];
   const requested = query.has("as") ? players.find((player) => player.role === (query.get("as") === "guest" ? "guest" : "host"))?.id : saved?.viewerId;
   const viewerId = players.some((player) => player.id === requested) ? requested : players.find((player) => player.role === "host").id;
-  if (saved?.camera) { app.camera = saved.camera; app.cameraInitialized = true; app.cameraTouched = true; applyCamera(); }
   app.state = projectPreviewModel(viewerId);
   app.player = app.state.you;
   app.sessionToken = "preview-session";
@@ -493,6 +493,7 @@ async function startPreview() {
     ? "本机离线试玩不能分享；真实开房后会生成 HTTPS 邀请链接。"
     : "复制当前离线试玩页面";
   showRoom();
+  if (saved?.camera) restoreCamera(saved.camera, saved.viewport);
   setConnectionState("demo");
   updatePreviewRoleControl();
   renderRoom();
@@ -599,6 +600,7 @@ async function joinRoom({ displayName = "", resumeToken = "", secret = "", seatK
   app.sessionToken = payload.sessionToken;
   app.player = payload.player;
   storeSession(payload.sessionToken);
+  const savedCamera = !app.cameraInitialized ? await recovery?.savedCamera(payload.gameId, payload.player.id) : null;
   recovery?.joined(payload);
 
   if (secret || seatKey || freshSession || autoJoinName) {
@@ -614,6 +616,7 @@ async function joinRoom({ displayName = "", resumeToken = "", secret = "", seatK
   }
 
   showRoom();
+  if (savedCamera) restoreCamera(savedCamera.camera, savedCamera.viewport);
   updateIdentity(payload.player);
   connectEvents();
 }
@@ -687,10 +690,8 @@ async function initialize() {
     if (cached) {
       app.state = cached.state; app.player = cached.state.you; app.sessionToken = cached.sessionToken;
       app.connectionOpen = false;
-      if (cached.camera && [cached.camera.x, cached.camera.y, cached.camera.scale].every(Number.isFinite)) {
-        app.camera = cached.camera; app.cameraInitialized = true; app.cameraTouched = true;
-      }
-      showRoom(); renderRoom(); applyCamera(); connectEvents(); setConnectionState("offline");
+      showRoom(); restoreCamera(cached.camera, cached.viewport);
+      renderRoom(); applyCamera(); connectEvents(); setConnectionState("offline");
       return;
     }
     showOffline(error.name === "AbortError"
@@ -1851,6 +1852,8 @@ function renderRoom() {
 }
 
 function applyCamera() {
+  const rect = elements.viewport.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) app.cameraViewport = { width: rect.width, height: rect.height };
   const { x, y, scale } = app.camera;
   elements.world.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
   $("#zoom-value").textContent = `${Math.round(scale * 100)}%`;
@@ -1861,6 +1864,30 @@ function applyCamera() {
   if (app.localCursor?.visible) renderCursors();
   recovery?.capture();
   previewRecovery?.capture();
+}
+
+function restoreCamera(camera, viewport) {
+  if (!camera || ![camera.x, camera.y, camera.scale].every(Number.isFinite)
+      || Math.abs(camera.x) > 100000 || Math.abs(camera.y) > 100000 || camera.scale < .015 || camera.scale > 3) return;
+  app.camera = { x: camera.x, y: camera.y, scale: camera.scale };
+  app.cameraViewport = viewport && [viewport.width, viewport.height].every((value) => Number.isFinite(value) && value > 0 && value <= 100000)
+    ? { width: viewport.width, height: viewport.height } : null;
+  app.cameraInitialized = true; app.cameraTouched = true;
+  resizeCamera();
+}
+
+function resizeCamera() {
+  const rect = elements.viewport.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  if (!app.cameraTouched) { fitCamera(); return; }
+  const previous = app.cameraViewport;
+  if (previous && (rect.width !== previous.width || rect.height !== previous.height)) {
+    cancelHandInteraction(); cancelTableTouches(); cancelDrag(); cancelPan();
+    // Keep the same world point in the center when the window changes size.
+    app.camera.x += (rect.width - previous.width) / 2;
+    app.camera.y += (rect.height - previous.height) / 2;
+  }
+  applyCamera();
 }
 
 function cameraLeftInset(rect) {
@@ -3205,8 +3232,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("resize", () => {
-  if (!app.cameraTouched) fitCamera();
-  else workspace?.drawMap();
+  resizeCamera();
   const libraryOpen = elements.libraryPanel.classList.contains("is-open");
   elements.libraryPanel.setAttribute("aria-modal", String(window.innerWidth < 760));
   elements.toolsBackdrop.classList.toggle("is-hidden", !elements.toolsPanel.classList.contains("is-open") && !(libraryOpen && window.innerWidth < 760));

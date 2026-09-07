@@ -47,6 +47,10 @@
       recordId = reference.id;
       return { ...record, ...reference };
     }
+    async function savedCamera(gameId, playerId) {
+      const record = await vault.getSeat(`${gameId}:${playerId}`).catch(() => null);
+      return record?.gameId === gameId && record.playerId === playerId ? { camera: record.camera, viewport: record.viewport } : null;
+    }
     function capture() {
       if (ui.previewMode || !app.state || !app.connectionOpen) return;
       clearTimeout(snapshotTimer);
@@ -57,8 +61,8 @@
         recordId = id;
         const record = { id, gameId: state.room.gameId, playerId: state.you.id, name: state.you.name, role: state.you.role,
           key: state.you.recoveryKey, sessionToken: app.sessionToken, roomCode: ui.roomCode, updatedAt: Date.now(),
-          state: structuredClone(state), camera: { ...app.camera } };
-        writeSession(referenceKey(), { ...record, state: undefined, camera: undefined });
+          state: structuredClone(state), camera: { ...app.camera }, viewport: app.cameraViewport && { ...app.cameraViewport } };
+        writeSession(referenceKey(), { ...record, state: undefined, camera: undefined, viewport: undefined });
         void vault.saveSeat(record).catch(storeWarning);
         lastSavedRevision = state.revision;
       }, lastSavedRevision === app.state.revision ? 500 : 200);
@@ -141,7 +145,7 @@
       for (const item of pending.values()) { item.resolve?.(null); await vault.deletePending(item.record.id).catch(() => {}); }
       pending.clear(); clearTimeout(retryTimer); clearTimeout(snapshotTimer); recordId = null;
     }
-    return { joined, capture, cachedSeat, preferredSeat, savedSeats, personalLink, send, retry, restorePending, forget, get pendingCount() { return pending.size; } };
+    return { joined, capture, cachedSeat, savedCamera, preferredSeat, savedSeats, personalLink, send, retry, restorePending, forget, get pendingCount() { return pending.size; } };
   }
   root.ParlorRecovery = Object.freeze({ create, parseSeatKey });
 })(globalThis);
