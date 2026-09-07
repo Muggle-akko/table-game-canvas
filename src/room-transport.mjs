@@ -12,6 +12,8 @@ import {
   playerForSession,
   publicStackForCard,
   tokenStackMembers,
+  tableSelectionResources,
+  tableSelectionDelta,
   cardSource,
   isExposedDeckCard,
   projectRoom,
@@ -93,10 +95,28 @@ const validDragId = (value) => typeof value === "string" && /^[\w-]{1,80}$/.test
 function sanitizeDragPreview(room, player, value, stackCache) {
   if (!value || typeof value !== "object") return null;
   const sourceType = String(value.sourceType || "");
-  if (!["card", "stack", "deck", "token", "token-stack", "object"].includes(sourceType)) return null;
+  if (!["card", "stack", "deck", "token", "token-stack", "object", "group"].includes(sourceType)) return null;
   const x = Number(value.x);
   const y = Number(value.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+  if (sourceType === "group") {
+    try {
+      const resources = tableSelectionResources(room, value.resources);
+      const anchor = resources.find((entry) => entry.type === value.anchorType && entry.value.id === value.resourceId);
+      if (!anchor || resources.some(({ value }) => value.locked)) return null;
+      const { dx, dy } = tableSelectionDelta(resources, x - anchor.value.x, y - anchor.value.y);
+      return {
+        sourceType, resourceId: anchor.value.id, anchorType: anchor.type,
+        ...(validDragId(value.dragId) ? { dragId: value.dragId } : {}),
+        x: anchor.value.x + dx, y: anchor.value.y + dy,
+        resources: resources.map(({ type, value: resource }) => ({ type, id: resource.id, offsetX: resource.x - anchor.value.x, offsetY: resource.y - anchor.value.y }))
+      };
+    } catch (error) {
+      if (error instanceof RoomError) return null;
+      throw error;
+    }
+  }
 
   let resourceId = null;
   let cardCount = null;

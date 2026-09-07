@@ -144,6 +144,7 @@ kbd { font: 11px/1.5 var(--body); border: 1px solid currentColor; border-radius:
 .playing-card:hover, .deck-stack:hover > .playing-card { box-shadow: 0 4px 8px #092c2440, 0 14px 28px #08221b4d; }
 .playing-card.is-selected, .table-token.is-selected, .deck-stack.is-selected, .world-object.is-selected { outline: 3px solid var(--accent); outline-offset: 5px; }
 .playing-card.is-selected.is-requested-card { outline-color: var(--request-color); }
+.is-group-selected .card-flip-button, .is-group-selected .deck-stack__menu, .is-group-selected .counter-object-row button { visibility: hidden; pointer-events: none; }
 .playing-card.is-requested-card::after { content: ""; position: absolute; inset: -5px; border: 3px solid var(--request-color); border-radius: 10px; pointer-events: none; box-shadow: 0 0 16px color-mix(in srgb, var(--request-color) 45%, transparent); }
 .is-card-request { align-items: center; }
 .card-request-accept { flex-shrink: 0; padding: 5px 8px; border-radius: 5px; color: var(--ink); background: var(--accent); font-size: 11px; }
@@ -275,6 +276,11 @@ kbd { font: 11px/1.5 var(--body); border: 1px solid currentColor; border-radius:
 .drag-card, .drag-token, .is-ghost { pointer-events: none; }
 .drag-stack { position: absolute; width: 94px; height: 138px; pointer-events: none; }
 .drag-stack > .playing-card { z-index: var(--stack-order) !important; }
+.drag-group { position: absolute; width: 0; height: 0; pointer-events: none; }
+.drag-group .table-token__label { display: none; }
+.drag-group.remote-drag__resource { outline: none; }
+.selection-box { position: absolute; z-index: 45; pointer-events: none; border: 1px solid #dce7aad9; background: #dce7aa14; border-radius: 3px; color: #e7edce; padding: 5px 7px; font-size: 11px; white-space: nowrap; box-shadow: 0 0 0 1px #19362f24; }
+.viewport.is-marquee-selecting { cursor: crosshair; }
 .drag-rotate-hint { position: absolute; bottom: -35px; left: 50%; transform: translateX(-50%) rotate(var(--drag-counter-rotation, 0deg)); padding: 4px 8px; border-radius: 4px; background: var(--chrome); color: var(--paper); font-size: 10px; white-space: nowrap; }
 .drag-card[data-placement="face-down"]::after { content: "背面盖放"; position: absolute; top: -28px; left: 0; padding: 3px 6px; background: var(--accent); color: var(--ink); border-radius: 4px; font-size: 10px; }
 .remote-drag { position: absolute; left: 0; top: 0; width: 94px; height: 138px; transition: transform 100ms linear; }
@@ -444,6 +450,8 @@ kbd { font: 11px/1.5 var(--body); border: 1px solid currentColor; border-radius:
 .selection-dock__close { position: absolute; top: 6px; right: 6px; width: 25px; height: 25px; display: grid; place-items: center; opacity: .6; }
 .selection-dock__close svg { width: 15px; height: 15px; }
 .selection-dock__actions { display: flex; gap: 5px; align-items: center; }
+.selection-dock[data-resource-key="group"] .selection-dock__copy { max-width: none; flex-wrap: wrap; }
+.selection-hint { font-size: 11px; color: #526749; line-height: 1.6; }
 .selection-dock__actions button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 7px 8px; border-radius: 6px; font-size: 10px; white-space: nowrap; }
 .selection-dock__actions button svg { width: 15px; height: 15px; }
 .selection-dock__actions button.is-accent { background: #dce6cc; }

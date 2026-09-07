@@ -1047,6 +1047,45 @@ function requireControllableResource(room, actor, type, id) {
   return result;
 }
 
+export function tableSelectionResources(room, references) {
+  if (!Array.isArray(references) || !references.length || references.length > 1800) {
+    throw new RoomError("INVALID_SELECTION", "请先选择要移动的桌面物件。");
+  }
+  const selected = new Map();
+  for (const ref of references) {
+    if (!ref || !["card", "deck", "token", "object"].includes(ref.type) || typeof ref.id !== "string") {
+      throw new RoomError("INVALID_SELECTION", "多选中包含无法识别的物件。");
+    }
+    const { resource } = requireResource(room, ref.type, ref.id);
+    if (ref.type === "card" && resource.zone !== "public") {
+      throw new RoomError("PRIVATE_SELECTION", "批量整理只移动桌面物件，手牌请单独操作。", 403);
+    }
+    selected.set(`${ref.type}:${ref.id}`, { type: ref.type, value: resource });
+  }
+  return [...selected.values()].sort((a, b) => a.value.z - b.value.z);
+}
+
+export function tableResourceBounds(type, resource) {
+  const width = type === "token" ? TABLE_GEOMETRY.tokenSize : type === "object" ? resource.width || 94 : TABLE_GEOMETRY.cardWidth;
+  const height = type === "token" ? TABLE_GEOMETRY.tokenSize : type === "object" ? resource.height || 138 : TABLE_GEOMETRY.cardHeight;
+  const rotation = type === "card" || type === "object" ? resource.rotation || 0 : 0;
+  const angle = rotation * Math.PI / 180;
+  const rotatedWidth = Math.abs(width * Math.cos(angle)) + Math.abs(height * Math.sin(angle));
+  const rotatedHeight = Math.abs(width * Math.sin(angle)) + Math.abs(height * Math.cos(angle));
+  return { x: resource.x + (width - rotatedWidth) / 2, y: resource.y + (height - rotatedHeight) / 2, width: rotatedWidth, height: rotatedHeight };
+}
+
+export function tableSelectionDelta(resources, x, y) {
+  const dx = Number(x), dy = Number(y);
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || !resources.length) throw new RoomError("INVALID_DROP", "没有收到有效的移动距离。");
+  const bounds = resources.map(({ type, value }) => tableResourceBounds(type, value));
+  const left = Math.min(...bounds.map((rect) => rect.x)), top = Math.min(...bounds.map((rect) => rect.y));
+  const right = Math.max(...bounds.map((rect) => rect.x + rect.width)), bottom = Math.max(...bounds.map((rect) => rect.y + rect.height));
+  const zone = TABLE_GEOMETRY.publicZone;
+  if (right - left > zone.width - 36 || bottom - top > zone.height - 56) throw new RoomError("SELECTION_TOO_LARGE", "这些物件相距太远，请分组移动。", 409);
+  return { dx: clamp(dx, zone.x + 18 - left, zone.x + zone.width - 18 - right), dy: clamp(dy, zone.y + 28 - top, zone.y + zone.height - 28 - bottom) };
+}
+
 function objectDropPoint(command, object) {
   const point = publicDropPoint(command);
   const zone = TABLE_GEOMETRY.publicZone;
@@ -1058,6 +1097,22 @@ function objectDropPoint(command, object) {
 
 function applyResourceCommand(room, actor, command) {
   const commit = (label, createdResource) => { addHistory(room, actor, label); touch(room); return createdResource ? { createdResource } : true; };
+  if (command.type === "move-resources") {
+    const resources = tableSelectionResources(room, command.resources);
+    resources.forEach(({ value }) => assertUnlocked(value));
+    for (const ref of command.resources) {
+      if (ref.x === undefined && ref.y === undefined) continue;
+      const { resource } = requireResource(room, ref.type, ref.id);
+      if (!Number.isFinite(ref.x) || !Number.isFinite(ref.y) || Math.abs(ref.x - resource.x) > .001 || Math.abs(ref.y - resource.y) > .001) {
+        throw new RoomError("SELECTION_CHANGED", "选中的物件已被移动，请重新拖动。", 409);
+      }
+    }
+    const { dx, dy } = tableSelectionDelta(resources, command.dx, command.dy);
+    if (!dx && !dy) return true;
+    saveUndoPoint(room);
+    for (const { value } of resources) Object.assign(value, { x: value.x + dx, y: value.y + dy });
+    return commit(`一起移动了 ${resources.length} 件物件`);
+  }
   if (command.type === "stack-onto" && ["token", "token-stack"].includes(command.resourceType)) {
     if (command.targetType !== "token") throw new RoomError("INVALID_TARGET", "只能把筹码叠到另一枚筹码上。");
     const sourcePile = requireTokenStack(room, command.resourceId, command.resourceType === "token-stack");
