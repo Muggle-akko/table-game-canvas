@@ -295,7 +295,6 @@
       const rect = ui.elements.viewport.getBoundingClientRect(), camera = ui.app.camera;
       ctx.globalAlpha = 1; ctx.strokeStyle = "#d8dfb8"; ctx.lineWidth = 2;
       ctx.strokeRect((-camera.x / camera.scale - mapBounds.x) * scale, (-camera.y / camera.scale - mapBounds.y) * scale, rect.width / camera.scale * scale, rect.height / camera.scale * scale);
-      $("zoom-value").textContent = `${Math.round(camera.scale * 100)}%`;
     }
 
     function renderLocations() {

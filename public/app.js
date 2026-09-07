@@ -1853,6 +1853,7 @@ function renderRoom() {
 function applyCamera() {
   const { x, y, scale } = app.camera;
   elements.world.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+  $("#zoom-value").textContent = `${Math.round(scale * 100)}%`;
   elements.viewport.style.setProperty("--grid-size", `${48 * scale}px`);
   elements.viewport.style.setProperty("--grid-x", `${x}px`);
   elements.viewport.style.setProperty("--grid-y", `${y}px`);
