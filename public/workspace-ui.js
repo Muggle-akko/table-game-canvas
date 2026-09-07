@@ -112,8 +112,8 @@
         if (pack?.cards[0]) {
           const face = pack.cards.find((card) => card.rank === "A") || pack.cards[0];
           const sample = el("div", "asset-card-front");
-          sample.style.setProperty("--sample-color", face.color || "#f6f0e6");
-          sample.style.setProperty("--sample-ink", face.textColor || (face.tone === "red" ? "#a74236" : "#223c31"));
+          sample.style.setProperty("--sample-color", face.color || "var(--card-stock)");
+          sample.style.setProperty("--sample-ink", face.textColor || (face.tone === "red" ? "var(--card-red)" : "var(--card-black)"));
           sample.append(el("b", "", face.rank), el("span", "", face.symbol)); visual.append(sample);
         }
       } else if (entry.type === "saved") {

@@ -1458,7 +1458,11 @@ function appendCardFace(container, face, cardId) {
   const front = document.createElement("div");
   front.className = `card-face${face.tone === "red" ? " is-red" : ""}`;
   const symbolCard = !face.hasImage && ["red", "green", "blue", "yellow", "wild"].includes(face.suit) && Boolean(face.color);
+  const pokerCard = !face.hasImage && !face.color && ["hearts", "diamonds", "clubs", "spades"].includes(face.suit) && /^(A|[2-9]|10|J|Q|K)$/.test(face.rank);
+  const jokerCard = !face.hasImage && !face.color && face.suit === "joker" && face.rank === "JOKER";
   if (symbolCard) front.classList.add("is-symbol-card");
+  if (pokerCard) front.classList.add("is-poker-card");
+  if (jokerCard) front.classList.add("is-joker-card");
   if (/^#[0-9a-f]{6}$/i.test(face.color || "")) {
     front.classList.add("has-custom-color");
     front.style.setProperty("--card-face-color", face.color);
@@ -1481,12 +1485,21 @@ function appendCardFace(container, face, cardId) {
   const symbol = document.createElement("span");
   symbol.className = "card-symbol";
   symbol.textContent = symbolCard && face.rank === "WILD" ? "◈" : face.symbol;
+  if (pokerCard) {
+    const rank = document.createElement("b");
+    rank.className = `card-rank${face.rank === "10" ? " card-rank--wide" : ""}`;
+    rank.textContent = face.rank;
+    const suit = document.createElement("span");
+    suit.className = "card-suit";
+    suit.textContent = face.symbol;
+    symbol.replaceChildren(rank, suit);
+  }
   if (symbolCard && face.suit === "wild") front.classList.add("is-wild");
   const caption = document.createElement("span");
   caption.className = "card-caption";
   caption.textContent = face.label;
   front.append(makeCorner(), symbol, makeCorner(true));
-  if (!symbolCard) front.append(caption);
+  if (!symbolCard && !pokerCard) front.append(caption);
   container.append(front);
 }
 
