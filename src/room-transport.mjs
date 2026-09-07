@@ -11,6 +11,8 @@ import {
   joinRoom,
   playerForSession,
   publicStackForCard,
+  cardSource,
+  isExposedDeckCard,
   projectRoom,
   replaceRoomPack,
   roomSummary,
@@ -104,7 +106,7 @@ function sanitizeDragPreview(room, player, value, stackCache) {
         stackCache.set(player.id, cached);
       }
       const cards = cached.cards;
-      if (cards.some((card) => card.locked || card.deckId === room.holdem?.deckId)) return null;
+      if (cards.some((card) => card.locked)) return null;
       cardCount = cards.length;
     } catch (error) {
       if (error instanceof RoomError) return null;
@@ -114,7 +116,7 @@ function sanitizeDragPreview(room, player, value, stackCache) {
     resourceId = String(value.resourceId || "");
     const card = room.cards.get(resourceId);
     const canControl = card && !["deck", "bag"].includes(card.zone)
-      && (card.deckId === room.holdem?.deckId ? card.zone === "hand" && card.ownerId === player.id : player.role === "host" || card.zone === "public" || card.ownerId === player.id);
+      && (player.role === "host" || card.zone === "public" || card.ownerId === player.id);
     if (!canControl || card.locked) return null;
   } else if (sourceType === "token") {
     resourceId = String(value.resourceId || "");
@@ -126,7 +128,7 @@ function sanitizeDragPreview(room, player, value, stackCache) {
     if (!object || object.bagId || object.locked) return null;
   } else {
     resourceId = String(value.resourceId || "main");
-    if (!room.decks.has(resourceId) || room.decks.get(resourceId).locked) return null;
+    if (!room.decks.has(resourceId) || room.decks.get(resourceId).hidden || room.decks.get(resourceId).locked) return null;
   }
 
   return {
@@ -304,22 +306,24 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
 
         if (kind === "back") {
           const deck = room.decks.get(resourceId || "main");
-          reference = deck?.back.image;
+          reference = !deck?.hidden ? deck?.back.image : null;
           packId = deck?.packId;
         } else if (kind === "token") {
           const token = room.tokens.get(resourceId);
           reference = token && !token.bagId ? token.image : null;
           packId = token?.packId || room.pack.id;
-        } else if (kind === "card") {
+        } else if (kind === "card" || kind === "card-back") {
           const player = playerForSession(room, requestUrl.searchParams.get("session") || "");
           if (!player) throw new RoomError("SESSION_EXPIRED", "玩家身份已失效，请重新加入。", 401);
           const card = room.cards.get(resourceId);
           if (!card) throw new RoomError("ASSET_NOT_FOUND", "图片资源不存在。", 404);
-          const canSeeFace = (card.zone === "public" && card.faceUp)
+          const canSeeFace = ((card.zone === "public" || isExposedDeckCard(room, card)) && card.faceUp)
             || (card.zone === "hand" && card.ownerId === player.id);
-          if (!canSeeFace) throw new RoomError("ASSET_FORBIDDEN", "你无权查看这张牌的正面。", 403);
-          reference = card.face.image;
-          packId = room.decks.get(card.deckId)?.packId;
+          const canSeeBack = ["public", "hand"].includes(card.zone) || isExposedDeckCard(room, card);
+          if (kind === "card" ? !canSeeFace : !canSeeBack) throw new RoomError("ASSET_FORBIDDEN", "你无权查看这张牌的图片。", 403);
+          const source = cardSource(room, card);
+          reference = kind === "card-back" ? source.back.image : card.face.image;
+          packId = source.packId;
           privateAsset = true;
         } else {
           throw new RoomError("ASSET_NOT_FOUND", "图片资源不存在。", 404);

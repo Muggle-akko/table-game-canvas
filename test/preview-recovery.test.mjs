@@ -9,24 +9,25 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 const saved = (client, id = client.app.previewPersistence.id) => client.vm(`ParlorVault.getPreview(${JSON.stringify(id)})`);
 const deckOrders = (client) => plain([...client.app.previewModel.engineRoom.decks.values()].map((deck) => [deck.id, deck.order]));
 
-test("preview refresh restores exact private cards, positions, poker decisions, chat and camera", async () => {
+test("preview refresh restores exact private cards, positions, mixed piles, chat and camera", async () => {
   const indexedDB = createLocalStoreDouble(), client = await loadClient({ indexedDB });
   await client.previewRecovery.flush();
   await client.sendCommand({ type: "draw" });
   const card = client.app.state.cards.find((card) => card.ownerId === client.app.state.you.id);
   await client.sendCommand({ type: "move-card", cardId: card.id, target: "hand", x: 430, y: 950, rotation: 30 });
   await client.sendCommand({ type: "rename-player", name: "明晚继续" });
-  await client.sendCommand({ type: "holdem-setup" });
-  await client.sendCommand({ type: "holdem-start" });
-  await client.sendCommand({ type: "holdem-action", action: "raise", to: 70 });
+  await client.sendCommand({ type: "add-pack", packId: "holdem-52", x: 1100, y: 450 });
+  const added = client.app.state.decks.at(-1);
+  await client.sendCommand({ type: "stack-onto", resourceType: "deck", resourceId: added.id, targetType: "deck", targetId: "main" });
+  await client.sendCommand({ type: "stack-onto", resourceType: "card", resourceId: client.app.state.cards.find((item) => item.zone === "public").id, targetType: "deck", targetId: "main" });
   await client.sendCommand({ type: "chat", text: "这手明天接着来" });
   client.vm("app.camera = { x: -500, y: 270, scale: .7 }; applyCamera();");
   await client.advanceTimers(350);
   assert.equal(client.app.previewPersistence.pending, false);
-  const expected = { gameId: client.app.state.room.gameId, poker: plain(client.app.state.holdem), decks: deckOrders(client), cards: plain(client.app.state.cards) };
+  const expected = { gameId: client.app.state.room.gameId, piles: plain(client.app.state.decks), decks: deckOrders(client), cards: plain(client.app.state.cards) };
   const refreshed = await loadClient({ indexedDB });
   assert.equal(refreshed.app.state.room.gameId, expected.gameId);
-  assert.deepEqual(plain(refreshed.app.state.holdem), expected.poker);
+  assert.deepEqual(plain(refreshed.app.state.decks), expected.piles);
   assert.deepEqual(deckOrders(refreshed), expected.decks);
   assert.deepEqual(plain(refreshed.app.state.cards), expected.cards);
   assert.deepEqual(plain(refreshed.app.camera), { x: -500, y: 270, scale: .7 });

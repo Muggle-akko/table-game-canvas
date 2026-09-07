@@ -205,7 +205,7 @@ function roomAssetUrl(kind, resourceId = "") {
     const deck = app.state?.decks?.find((item) => item.id === (resourceId || "main"));
     if (deck) url.searchParams.set("pack", deck.packId);
   }
-  if (kind === "card") {
+  if (kind === "card" || kind === "card-back") {
     if (!app.sessionToken) return "";
     url.searchParams.set("session", app.sessionToken);
   }
@@ -1000,7 +1000,7 @@ function visibleStackForCard(cardId) {
 function activeDeck() {
   const selectedId = app.selection?.type === "deck" ? app.selection.id : null;
   return app.state?.decks?.find((deck) => deck.id === selectedId)
-    || app.state?.decks?.find((deck) => deck.id === "main") || app.state?.deck;
+    || app.state?.decks?.find((deck) => deck.id === "main") || app.state?.decks?.[0] || app.state?.deck;
 }
 
 function selectedResource() {
@@ -1140,21 +1140,15 @@ function renderSelectionDock() {
   let allowTransfer = false;
   elements.selectionDock.classList.remove("is-hidden");
 
-  if (resource.value.managedBy === "holdem" || resource.value.id === app.state.holdem?.matId) {
-    elements.selectionMeta.textContent = "德州助手";
-    elements.selectionTitle.textContent = resource.value.face?.label || resource.value.label || "本手底牌";
-    actions.push(makeSelectionAction("open-holdem", "cards-three", "继续德州", { accent: true }));
-    if (resource.type === "card" && resource.value.zone === "hand" && resource.value.ownerId === app.state.you.id) {
-      secondaryActions.push(makeSelectionAction("rotate-left", "arrow-counter-clockwise", "左转", { disabled: !connected }));
-      secondaryActions.push(makeSelectionAction("rotate-right", "arrow-clockwise", "右转", { disabled: !connected }));
-      secondaryActions.push(makeSelectionAction("arrange-hand", "stack", "整理私人区", { disabled: !connected }));
-    }
-  } else if (resource.type === "deck") {
+  if (resource.type === "deck") {
     elements.selectionMeta.textContent = `${resource.value.count} 张`;
     elements.selectionTitle.textContent = resource.value.label;
     actions.push(makeSelectionAction("draw", "cards-three", "抽一张", { accent: true, disabled: !connected || !resource.value.canDraw }));
-    actions.push(makeSelectionAction("draw-public", "arrow-line-down", "盖放", { disabled: !connected || !resource.value.canDraw }));
+    actions.push(makeSelectionAction("draw-public", "arrow-line-down", "取到桌上", { disabled: !connected || !resource.value.canDraw }));
     actions.push(makeSelectionAction("shuffle-deck", "shuffle", "洗牌", { disabled: !connected || resource.value.count < 2 }));
+    actions.push(makeSelectionAction("spread-deck", "arrows-out-line-horizontal", "横向展开", { disabled: !connected || !resource.value.count || resource.value.locked }));
+    secondaryActions.push(makeSelectionAction("spread-deck-column", "arrows-out-line-horizontal", "纵向展开", { disabled: !connected || !resource.value.count || resource.value.locked }));
+    secondaryActions.push(makeSelectionAction("spread-deck-grid", "corners-out", "网格展开", { disabled: !connected || !resource.value.count || resource.value.locked }));
     secondaryActions.push(makeSelectionAction("collect-deck", "stack", "收回散牌", { disabled: !connected || !resource.value.publicCount }));
     allowTransfer = app.state.players.length > 1 && resource.value.canDraw;
   } else if (resource.type === "token") {
@@ -1183,7 +1177,9 @@ function renderSelectionDock() {
       elements.selectionTitle.textContent = card.face?.label || "背面牌堆";
       actions.push(makeSelectionAction("draw-stack", "cards-three", "抽一张", { accent: true, disabled: !canEdit || stackLocked }));
       actions.push(makeSelectionAction("shuffle-stack", "shuffle", "洗牌", { disabled: !canEdit || stackLocked }));
-      actions.push(makeSelectionAction("spread-stack", "arrows-out-line-horizontal", "展开", { disabled: !canEdit || stackLocked }));
+      actions.push(makeSelectionAction("spread-stack", "arrows-out-line-horizontal", "横向展开", { disabled: !canEdit || stackLocked }));
+      secondaryActions.push(makeSelectionAction("spread-stack-column", "arrows-out-line-horizontal", "纵向展开", { disabled: !canEdit || stackLocked }));
+      secondaryActions.push(makeSelectionAction("spread-stack-grid", "corners-out", "网格展开", { disabled: !canEdit || stackLocked }));
     } else if (card.zone === "hand" && card.ownerId !== app.state.you.id) {
       elements.selectionMeta.textContent = "朋友的私人区";
       elements.selectionTitle.textContent = "背面朝上的牌";
@@ -1244,8 +1240,9 @@ function runSelectionAction(action) {
     if (action === "draw") sendCommand({ type: "draw", deckId });
     else if (action === "draw-public") {
       const point = nextOpenPublicCardPoint();
-      sendCommand({ type: "draw-public", deckId, ...point, rotation: 0 });
+      sendCommand({ type: "draw-public", deckId, ...point });
     } else if (action === "shuffle-deck") sendCommand({ type: "shuffle", deckId });
+    else if (action.startsWith("spread-deck")) sendCommand({ type: "spread-deck", deckId, layout: action.endsWith("column") ? "column" : action.endsWith("grid") ? "grid" : "row" });
     return;
   }
   if (resource.type === "token") {
@@ -1289,7 +1286,9 @@ function runSelectionAction(action) {
     });
   } else if (action === "return-card") {
     sendCommand({ type: "move-card", cardId: card.id, target: "hand", ownerId: app.state.you.id });
-  } else if (["shuffle-stack", "draw-stack", "spread-stack"].includes(action)) {
+  } else if (action.startsWith("spread-stack")) {
+    sendCommand({ type: "spread-stack", cardId: card.id, layout: action.endsWith("column") ? "column" : action.endsWith("grid") ? "grid" : "row" });
+  } else if (["shuffle-stack", "draw-stack"].includes(action)) {
     sendCommand({ type: action, cardId: card.id });
   }
 }
@@ -1381,12 +1380,12 @@ function appendRoomAssetImage(container, source, className) {
   return image;
 }
 
-function appendCardBack(container, source, deckId = "main") {
+function appendCardBack(container, source, deckId = "main", cardId = "") {
   const visual = applyCardBackVisual(container, cardBackVisual(source));
   const back = document.createElement("div");
   back.className = "card-back";
   back.dataset.cardBackTheme = visual.theme;
-  if (visual.hasImage) appendRoomAssetImage(back, roomAssetUrl("back", deckId), "card-back__image");
+  if (visual.hasImage) appendRoomAssetImage(back, roomAssetUrl(cardId ? "card-back" : "back", cardId || deckId), "card-back__image");
   const monogram = document.createElement("span");
   monogram.className = "card-back__monogram";
   monogram.textContent = Array.from(visual.label)[0] || "P";
@@ -1454,7 +1453,8 @@ function makeCardNode(card, position, { ghost = false } = {}) {
     ? `${card.face.label}${interactionHint}`
     : `${cardBackVisual(card.back).label} 牌背${interactionHint}`;
   if (card.face) appendCardFace(node, card.face, card.id);
-  else appendCardBack(node, card.back, card.deckId);
+  else appendCardBack(node, card.back, card.deckId, card.id);
+  if (!ghost) appendLockIndicator(node, card.locked);
   if (!ghost && card.zone === "public" && card.canControl) {
     const flip = document.createElement("button");
     flip.className = "card-flip-button";
@@ -1466,6 +1466,18 @@ function makeCardNode(card, position, { ghost = false } = {}) {
     node.append(flip);
   }
   return node;
+}
+
+function appendLockIndicator(node, locked) {
+  if (!locked) return;
+  const indicator = document.createElement("span");
+  indicator.className = "resource-lock";
+  indicator.setAttribute("aria-hidden", "true");
+  indicator.append(phIcon("lock-simple"));
+  node.append(indicator);
+  const label = node.getAttribute("aria-label") || "物件";
+  if (!label.includes("已锁定")) node.setAttribute("aria-label", `${label}，已锁定`);
+  node.title += " · 已锁定";
 }
 
 function appendStackCount(node, count) {
@@ -1510,11 +1522,14 @@ function makeTokenNode(token, { ghost = false } = {}) {
   const symbol = document.createElement("span");
   symbol.className = "table-token__symbol";
   symbol.textContent = token.symbol ?? "•";
+  symbol.style.fontSize = `${symbol.textContent.length > 5 ? 11 : symbol.textContent.length > 3 ? 14 : symbol.textContent.length > 2 ? 19 : 25}px`;
+  symbol.style.color = cardBackVisual({ color: token.color }).contrast;
   face.append(symbol);
   const label = document.createElement("small");
   label.className = "table-token__label";
   label.textContent = token.label;
   node.append(face, label);
+  if (!ghost) appendLockIndicator(node, token.locked);
   return node;
 }
 
@@ -1539,7 +1554,7 @@ function renderDeck() {
   const ids = new Set();
   for (const deck of app.state.decks || []) {
   ids.add(deck.id);
-  const old = existing.get(deck.id), signature = JSON.stringify([deck.back, deck.label, deck.count, deck.locked]);
+  const old = existing.get(deck.id), signature = JSON.stringify([deck.back, deck.label, deck.count, deck.locked, deck.top]);
   if (old?.dataset.signature === signature) {
     old.style.left = `${deck.x}px`; old.style.top = `${deck.y}px`; old.style.zIndex = String(20 + deck.z);
     continue;
@@ -1560,7 +1575,9 @@ function renderDeck() {
 
   const card = document.createElement("div");
   card.className = "playing-card";
-  appendCardBack(card, deck.back, deck.id);
+  if (deck.top?.face) appendCardFace(card, deck.top.face, deck.top.id);
+  else appendCardBack(card, deck.top?.back || deck.back, deck.id, deck.top?.id);
+  card.style.transform = `rotate(${deck.top?.rotation || 0}deg)`;
   const count = document.createElement("span");
   count.className = "deck-stack__count";
   count.textContent = deck.count > 0 ? String(deck.count) : "0";
@@ -1573,6 +1590,7 @@ function renderDeck() {
   menu.append(phIcon("sliders-horizontal"));
   const label = document.createElement("small"); label.className = "deck-stack__label"; label.textContent = deck.label;
   stack.append(card, count, menu, label);
+  appendLockIndicator(stack, deck.locked);
   if (old) {
     const focused = old.contains(document.activeElement); old.replaceWith(stack);
     if (focused) stack.focus({ preventScroll: true });
@@ -1612,13 +1630,13 @@ function renderCards() {
     node.style.transform = `rotate(${position.rotation || 0}deg)`; node.style.zIndex = String(20 + (position.z || 0));
     node.classList.remove("is-stack-top");
     node.querySelector(".card-stack-count")?.remove();
-    node.setAttribute("aria-label", card.face?.label || "背面朝上的牌");
+    node.setAttribute("aria-label", `${card.face?.label || "背面朝上的牌"}${card.locked ? "，已锁定" : ""}`);
     if (card.zone === "public") {
       const stack = visibleStackForCard(card.id);
       if (stack.length >= 2) node.title = `${stack.length} 张牌堆 · 拖动整组，轻点操作`;
       if (stack.length >= 2 && stack.at(-1)?.id === card.id) {
         node.classList.add("is-stack-top");
-        node.setAttribute("aria-label", `公共牌堆，${stack.length} 张`);
+        node.setAttribute("aria-label", `公共牌堆，${stack.length} 张${stack.some((entry) => entry.locked) ? "，含锁定的牌" : ""}`);
         appendStackCount(node, stack.length);
       }
     }
@@ -1778,39 +1796,33 @@ function renderTools() {
   const pending = (type) => app.pendingCommands.has(type);
   const deck = activeDeck();
   const maximumDeal = Number(elements.dealCount.dataset.maximum) || 0;
-  const poker = app.state.holdem, pokerDeck = Boolean(poker && deck.id === poker.deckId);
   elements.rollDie.disabled = !connected || pending("roll-die");
   elements.decrementCounter.disabled = !connected || pending("adjust-counter") || counter.value <= counter.min;
   elements.incrementCounter.disabled = !connected || pending("adjust-counter") || counter.value >= counter.max;
-  elements.turnPlayerSelect.disabled = !connected || !isHost || Boolean(poker) || pending("set-turn");
-  elements.randomTurn.disabled = !connected || !isHost || Boolean(poker) || pending("random-turn");
-  elements.nextTurn.disabled = !connected || !isHost || Boolean(poker) || pending("advance-turn");
+  elements.turnPlayerSelect.disabled = !connected || !isHost || pending("set-turn");
+  elements.randomTurn.disabled = !connected || !isHost || pending("random-turn");
+  elements.nextTurn.disabled = !connected || !isHost || pending("advance-turn");
   elements.undoTable.disabled = !connected || !isHost || !app.state.canUndo || pending("undo");
   elements.drawCard.disabled = !connected || !deck.canDraw || pending("draw");
-  elements.dealCount.disabled = !connected || !isHost || pokerDeck || maximumDeal < 1 || pending("deal-each");
-  elements.dealCards.disabled = !connected || !isHost || pokerDeck || maximumDeal < 1 || pending("deal-each");
-  elements.shuffleDeck.disabled = !connected || pokerDeck || deck.count < 2 || pending("shuffle");
+  elements.dealCount.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each");
+  elements.dealCards.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each");
+  elements.shuffleDeck.disabled = !connected || deck.count < 2 || pending("shuffle");
   elements.quickUndo.disabled = !connected || !isHost || !app.state.canUndo || pending("undo");
   elements.quickUndo.title = isHost ? "撤销上一步 · U" : "由房主撤销操作";
   elements.shuffleDeck.querySelector("strong").textContent = "洗选中牌盒";
   elements.drawCard.title = `从「${deck.label || "起始牌盒"}」抽牌`;
   const publicCardCount = app.state.cards.filter((card) => card.zone === "public").length;
-  elements.tidyPublic.disabled = !connected || !isHost || Boolean(poker) || publicCardCount < 1 || pending("tidy-public");
-  elements.collectPublic.disabled = !connected || !isHost || Boolean(poker) || publicCardCount < 1 || pending("collect-public");
-  elements.resetTable.disabled = !connected || !isHost || Boolean(poker) || pending("reset");
-  for (const control of [elements.turnPlayerSelect, elements.randomTurn, elements.nextTurn, elements.tidyPublic, elements.collectPublic, elements.resetTable]) {
-    control.title = poker ? "德州助手正在管理牌局，请在德州面板继续操作。" : "";
-  }
+  elements.tidyPublic.disabled = !connected || !isHost || publicCardCount < 1 || pending("tidy-public");
+  elements.collectPublic.disabled = !connected || !isHost || publicCardCount < 1 || pending("collect-public");
+  elements.resetTable.disabled = !connected || !isHost || pending("reset");
   elements.pingLocation.disabled = !connected;
   elements.offlineSeatCount.textContent = `${offlineGuests.length} 离线`;
   elements.offlineSeatCount.classList.toggle("is-complete", offlineGuests.length === 0);
   elements.leaveSeat.classList.toggle("is-hidden", isHost);
   elements.cleanupOffline.classList.toggle("is-hidden", !isHost);
   elements.openGuestTest.classList.toggle("is-hidden", !isHost || previewMode);
-  const pokerSeat = poker?.players.some((player) => player.playerId === app.state.you.id);
-  const offlinePokerSeat = poker?.players.some((player) => offlineGuests.some((guest) => guest.id === player.playerId));
-  elements.leaveSeat.disabled = !connected || Boolean(pokerSeat) || pending("leave-seat");
-  elements.cleanupOffline.disabled = !connected || Boolean(offlinePokerSeat) || offlineGuests.length === 0 || pending("cleanup-offline");
+  elements.leaveSeat.disabled = !connected || pending("leave-seat");
+  elements.cleanupOffline.disabled = !connected || offlineGuests.length === 0 || pending("cleanup-offline");
   elements.openGuestTest.disabled = !connected;
   for (const control of elements.toolsPanel.querySelectorAll(".host-tool")) {
     control.classList.toggle("is-hidden", !isHost);
@@ -1818,8 +1830,8 @@ function renderTools() {
   elements.cleanupOffline.textContent = offlineGuests.length > 0
     ? `清理 ${offlineGuests.length} 个离线席位`
     : "没有离线席位";
-  elements.leaveSeat.title = pokerSeat ? "德州玩家可先在德州面板休息，结束助手后可以离席。" : "离开席位，手牌归回牌盒";
-  elements.cleanupOffline.title = offlinePokerSeat ? "先结束德州助手，再清理参加牌局的离线席位。" : "清理离线席位，手牌归回牌盒";
+  elements.leaveSeat.title = "离开席位，手牌归回牌盒";
+  elements.cleanupOffline.title = "清理离线席位，手牌归回牌盒";
   renderPackLibrary();
   renderSelectionDock();
   workspace?.renderSaveStatus();
@@ -2249,8 +2261,8 @@ function makeRemoteDragNode(preview) {
     const deck = app.state.decks?.find((item) => item.id === (preview.resourceId || "main"));
     if (!deck) return null;
     resource = makeCardNode(
-      { id: "remote-deck", deckId: deck.id, back: deck.back, zone: "deck", face: null, canControl: false },
-      { x: 0, y: 0, rotation: preview.rotation || 0, z: 0 },
+      { id: "", deckId: deck.id, back: deck.back, face: null, ...deck.top, zone: "deck", canControl: false },
+      { x: 0, y: 0, rotation: deck.top?.rotation || 0, z: 0 },
       { ghost: true }
     );
   } else if (preview.sourceType === "object") {
@@ -2374,6 +2386,8 @@ function clearDropTargets() {
   elements.publicZone.classList.remove("is-drop-target", "is-face-down-target");
   for (const zone of elements.handZones.querySelectorAll(".hand-zone")) zone.classList.remove("is-drop-target");
   for (const node of elements.objectsRoot.querySelectorAll(".is-drop-target")) node.classList.remove("is-drop-target");
+  for (const root of [elements.deckRoot, elements.cardsRoot]) for (const node of root.querySelectorAll(".is-drop-target")) node.classList.remove("is-drop-target");
+  app.drag?.ghost.querySelector(".pile-drop-hint")?.classList.add("is-hidden");
   elements.handDrawer.classList.remove("is-drop-target");
   elements.openHand.classList.remove("is-drop-target");
 }
@@ -2404,11 +2418,37 @@ function bagTargetAt(point) {
   return (app.state.objects || []).filter((object) => object.kind === "bag" && object.id !== app.drag.resource?.id && pointInside(point, object)).sort((a, b) => b.z - a.z)[0] || null;
 }
 
+function pileTargetAt(point) {
+  const drag = app.drag;
+  if (!drag || !["card", "stack", "deck"].includes(drag.sourceType)) return null;
+  const screen = worldToViewport(point), viewport = elements.viewport.getBoundingClientRect();
+  const hit = document.elementFromPoint(viewport.left + screen.x, viewport.top + screen.y);
+  if (hit?.closest(".hand-drawer, .hand-toggle")) return null;
+  const excluded = new Set(drag.sourceType === "stack" ? drag.stackCards.map((card) => card.id) : [drag.resource.id]);
+  const onCard = (card, rotation = card.rotation || 0) => {
+    const { cardWidth: width, cardHeight: height } = app.state.room.geometry;
+    const dx = point.x - card.x - width / 2, dy = point.y - card.y - height / 2, angle = rotation * Math.PI / 180;
+    return Math.abs(dx * Math.cos(angle) + dy * Math.sin(angle)) <= width / 2
+      && Math.abs(-dx * Math.sin(angle) + dy * Math.cos(angle)) <= height / 2;
+  };
+  return [
+    ...(app.state.decks || []).filter((deck) => !excluded.has(deck.id) && onCard(deck, deck.top?.rotation || 0)).map((deck) => ({ type: "deck", ...deck })),
+    ...app.state.cards.filter((card) => card.zone === "public" && !excluded.has(card.id) && !card.locked && onCard(card)
+      && !visibleStackForCard(card.id).some((entry) => entry.locked)).map((card) => ({ type: "card", ...card }))
+  ].sort((a, b) => b.z - a.z)[0] || null;
+}
+
 function updateDropTargets(point) {
   clearDropTargets();
   if (!app.drag || !app.state) return;
   const bag = bagTargetAt(point);
   if (bag) { sourceNodeFor("object", bag.id)?.classList.add("is-drop-target"); return; }
+  const pile = pileTargetAt(point);
+  if (pile) {
+    sourceNodeFor(pile.type, pile.id)?.classList.add("is-drop-target");
+    app.drag.ghost.querySelector(".pile-drop-hint")?.classList.remove("is-hidden");
+    return;
+  }
   const handTargetId = handTargetAt(point);
   if (["deck", "card", "stack"].includes(app.drag.sourceType) && handTargetId) {
     handZoneElement(handTargetId)?.classList.add("is-drop-target");
@@ -2444,9 +2484,6 @@ function setDragSourceClasses(drag, active) {
 function startDrag(event, sourceType, resource = null) {
   if (!app.state || !resource) return;
   if (app.drag || app.pan || app.touchNavigation || (event.pointerType === "touch" && (event.isPrimary === false || app.tableTouches.size))) return;
-  if (resource.managedBy === "holdem" && (resource.zone !== "hand" || resource.ownerId !== app.state.you.id)) {
-    selectResource(sourceType, resource.id); event.preventDefault(); return;
-  }
   if (sourceType === "card" && resource.zone === "hand" && resource.ownerId !== app.state.you.id) {
     selectResource("card", resource.id);
     void feedback.requestCard(resource);
@@ -2462,7 +2499,7 @@ function startDrag(event, sourceType, resource = null) {
   if (stackCards.length >= 2) sourceType = "stack";
   const point = screenToWorld(event.clientX, event.clientY);
   let sourcePosition = ["deck", "token", "object"].includes(sourceType)
-      ? { x: resource.x, y: resource.y, z: resource.z }
+      ? { x: resource.x, y: resource.y, z: resource.z, rotation: sourceType === "deck" ? resource.top?.rotation || 0 : resource.rotation || 0 }
       : app.cardPositions.get(resource.id);
   if (!sourcePosition) return;
   const pocketNode = event.target.closest("#hand-cards .playing-card");
@@ -2479,12 +2516,12 @@ function startDrag(event, sourceType, resource = null) {
         ? workspace.makeObjectNode(resource, { ghost: true })
       : makeCardNode(
           sourceType === "deck"
-            ? { id: "deck-ghost", deckId: resource.id, back: resource.back, face: null, canControl: false }
+            ? { id: "", deckId: resource.id, back: resource.back, face: null, ...resource.top, canControl: false }
             : { ...resource, canControl: false },
           sourcePosition,
           { ghost: true }
         );
-  const initialRotation = sourceType === "card" ? Number(sourcePosition.rotation) || 0 : 0;
+  const initialRotation = ["card", "deck"].includes(sourceType) ? Number(sourcePosition.rotation) || 0 : 0;
   if (sourceType === "card") {
     ghost.dataset.rotation = String(Math.round(initialRotation));
     ghost.style.setProperty("--drag-counter-rotation", `${-initialRotation}deg`);
@@ -2495,6 +2532,12 @@ function startDrag(event, sourceType, resource = null) {
     ghost.append(hint);
   }
   ghost.style.zIndex = "190";
+  if (["card", "stack", "deck"].includes(sourceType)) {
+    const hint = document.createElement("span");
+    hint.className = "pile-drop-hint is-hidden";
+    hint.textContent = "叠到顶部";
+    ghost.append(hint);
+  }
   ghost.style.left = `${sourcePosition.x}px`;
   ghost.style.top = `${sourcePosition.y}px`;
 
@@ -2561,7 +2604,7 @@ function moveDrag(event) {
   }
   const overPublic = pointInside(point, app.state.room.geometry.publicZone);
   app.drag.placeFaceDown = overPublic && (
-    app.drag.sourceType === "deck"
+    (app.drag.sourceType === "deck" && !app.drag.resource.top?.faceUp)
       || (app.drag.sourceType === "card" && (
         app.drag.resource.zone === "public" ? app.drag.resource.faceUp === false : event.shiftKey
       ))
@@ -2599,6 +2642,7 @@ function finishDrag(event) {
   const point = screenToWorld(event.clientX, event.clientY);
   const handTargetId = handTargetAt(point);
   const bag = bagTargetAt(point);
+  const pile = pileTargetAt(point);
   const hit = document.elementFromPoint(event.clientX, event.clientY);
   const overlay = hit?.closest(".topbar, .side-panel, .library-panel, .aux-panel, .history-panel, .selection-dock, .table-rail, .zoom-controls, .world-overview");
   const rect = elements.viewport.getBoundingClientRect();
@@ -2606,6 +2650,7 @@ function finishDrag(event) {
   let command = null;
   if (!overlay && (inside || handTargetId)) {
     if (bag) command = { type: "bag-put", bagId: bag.id, resourceType: drag.sourceType, resourceId: drag.resource.id };
+    else if (pile) command = { type: "stack-onto", resourceType: drag.sourceType, resourceId: drag.resource.id, targetType: pile.type, targetId: pile.id };
     else if (["deck", "card", "stack"].includes(drag.sourceType) && handTargetId) {
       const privatePoint = pointInside(point, app.handLayouts.get(handTargetId)) ? { x: drag.x, y: drag.y, rotation: drag.rotation } : {};
       command = drag.sourceType === "deck" ? { type: "draw", deckId: drag.resource.id, ownerId: handTargetId, ...privatePoint }
@@ -2623,7 +2668,13 @@ function finishDrag(event) {
   }
   cancelDrag();
   selectResource(type, drag.resource.id);
-  if (command) void sendCommand(command);
+  if (command?.type === "stack-onto") {
+    const intent = app.selectionIntent, playerId = app.state.you.id;
+    void sendCommand(command, { withReceipt: true }).then((receipt) => {
+      const created = receipt?.createdResource;
+      if (created && app.selectionIntent === intent && app.state?.you.id === playerId && !app.drag) selectResource(created.type, created.id, { preserveIntent: true });
+    });
+  } else if (command) void sendCommand(command);
 }
 
 async function applyPreviewCommand(command) {
@@ -2826,7 +2877,7 @@ elements.shuffleDeck.addEventListener("click", () => sendCommand({ type: "shuffl
 elements.tidyPublic.addEventListener("click", () => sendCommand({ type: "tidy-public" }));
 elements.collectPublic.addEventListener("click", () => {
   const count = app.state?.cards.filter((card) => card.zone === "public").length || 0;
-  if (count > 0 && window.confirm(`把桌面的 ${count} 张散牌洗回各自的牌盒？手牌会留在原处。`)) {
+  if (count > 0 && window.confirm(`把桌面的 ${count} 张散牌叠回各自牌堆顶部？保留正反面和角度，手牌留在原处。`)) {
     sendCommand({ type: "collect-public" });
   }
 });
@@ -3297,7 +3348,7 @@ if (previewMode) previewRecovery = window.ParlorPreviewRecovery.create({
 });
 workspace = window.ParlorWorkspace.create({
   app, elements, previewMode, toast, sendCommand, screenToWorld,
-  fitCamera, fitAll, focusWorldPoint, applyCamera, makeCardNode,
+  fitCamera, fitAll, focusWorldPoint, applyCamera, makeCardNode, appendLockIndicator,
   makeSelectionAction, selectedResource, selectResource, clearSelection,
   showLibrary, toggleLibrary, hideSidePanels, cancelHandInteraction,
   copyText, personalLink: () => recovery.personalLink(),

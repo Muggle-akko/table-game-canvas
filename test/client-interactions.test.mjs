@@ -21,7 +21,7 @@ test("client boots the actual scripts and adds packs without replacing the first
   assert.equal($("room-screen").classList.contains("is-hidden"), false);
   assert.equal($("library-panel").classList.contains("is-open"), false);
   await dispatch($("open-library"), "click");
-  assert.equal($("pack-library").children.length, 17);
+  assert.equal($("pack-library").children.length, 22);
   assert.equal($("objects-root").children.length, 2);
   assert.equal($("welcome-resources").children.length, 5);
   const privateCard = app.state.cards.find((card) => card.ownerId === "player_a" && card.zone === "hand");

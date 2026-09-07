@@ -285,9 +285,9 @@ test("collects only public cards into the deck without touching private hands", 
   assert.equal(collected.deck.count, before.deck.count + 2);
   assert.equal(collected.cards.filter((card) => card.zone === "public").length, 0);
   assert.equal(collected.cards.filter((card) => card.zone === "hand").length, 2);
-  assert.ok([...knownPublicIds].every((cardId) => !room.cards.has(cardId) && !room.deckOrder.includes(cardId)));
+  assert.deepEqual(room.deckOrder.slice(-2), [...knownPublicIds]);
   assert.equal(projectRoom(room, guest.id).cards.find((card) => card.ownerId === host.id).face, null);
-  assert.match(collected.history.at(-1).label, /2 张公共牌洗回牌叠/);
+  assert.match(collected.history.at(-1).label, /2 张公共牌叠回各自牌堆顶部/);
 
   applyCommand(room, host.id, { type: "undo" });
   const restoredPublic = projectRoom(room, host.id).cards.filter((card) => card.zone === "public");
@@ -320,7 +320,7 @@ test("treats two overlapping public cards as an authoritative shuffleable stack"
   const shuffledView = projectRoom(room, guest.id);
   const shuffledCards = shuffledView.cards.filter((card) => card.zone === "public");
   assert.equal(shuffledCards.length, 3);
-  assert.ok(shuffledCards.every((card) => card.face === null && card.faceUp === false));
+  assert.ok(shuffledCards.every((card) => card.face && card.faceUp === true), "shuffle keeps every card facing the same way");
   assert.ok(shuffledCards.every((card) => !knownIds.has(card.id)));
   assert.ok(shuffledCards.every((card) => Math.abs(card.x - shuffledCards[0].x) < 5));
   assert.match(shuffledView.history.at(-1).label, /洗了一个 3 张的牌堆/);

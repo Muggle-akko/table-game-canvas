@@ -5,7 +5,7 @@
     if (text !== undefined) item.textContent = text;
     return item;
   };
-  const categoryFor = (action = "") => action.startsWith("holdem-") ? "holdem" : /card|deck|stack|draw|shuffle|deal|collect/.test(action) ? "cards"
+  const categoryFor = (action = "") => /card|deck|stack|draw|shuffle|deal|collect/.test(action) ? "cards"
     : /resource|template|pack|bag|token/.test(action) ? "objects" : "table";
 
   function create(ui) {

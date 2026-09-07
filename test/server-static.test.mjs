@@ -49,7 +49,7 @@ test("entry pages reference current client assets and runtime files require cach
   await serveStatic(response, "/");
   const html = response.body.toString("utf8");
   const assets = [...html.matchAll(/(?:src|href)="(\.\/[^\"]+\.(?:js|css)\?v=[a-f0-9]{16})"/g)].map((match) => match[1]);
-  assert.equal(assets.length, 13);
+  assert.equal(assets.length, 12);
   assert.equal(response.headers["Cache-Control"], "no-cache");
   for (const asset of assets) {
     const file = new MockResponse();

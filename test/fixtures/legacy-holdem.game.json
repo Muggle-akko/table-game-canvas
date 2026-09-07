@@ -1,0 +1,1590 @@
+{
+  "format": "parlor.game",
+  "version": 1,
+  "gameId": "27245029-e86a-4772-9183-ec795bc180e2",
+  "name": "0.12.1 legacy fixtur",
+  "savedAt": 1788761288032,
+  "maxPlayers": 8,
+  "players": [
+    {
+      "id": "player_5f0b6dd5dec24ffb8f239ef5f42feb1b",
+      "name": "旧房主",
+      "color": "#ff6247",
+      "role": "host",
+      "seatIndex": 0,
+      "recoveryKey": "49c523ef6e0544448500a9b1499d1be49565b5e50fb043e0ac7d3832adb9fc3f",
+      "privateZone": {
+        "x": 205,
+        "y": 825,
+        "width": 660,
+        "height": 380
+      }
+    },
+    {
+      "id": "player_caaede61923e483b9e57ff7eb8eae5c8",
+      "name": "旧客人",
+      "color": "#4388ff",
+      "role": "guest",
+      "seatIndex": 1,
+      "recoveryKey": "1fcddc7e16b4424c80c6d7e513c2dd72ff3dfa074af544b6b6c6196808571cc8",
+      "privateZone": {
+        "x": 915,
+        "y": 825,
+        "width": 660,
+        "height": 380
+      }
+    }
+  ],
+  "hands": [
+    {
+      "cardId": "card_1cf5156b8f524959aadc2651a710ca72",
+      "ownerId": "player_5f0b6dd5dec24ffb8f239ef5f42feb1b",
+      "handOrder": 1
+    },
+    {
+      "cardId": "card_58e10803db7342cf8d2b8e71e2f09d49",
+      "ownerId": "player_caaede61923e483b9e57ff7eb8eae5c8",
+      "handOrder": 2
+    },
+    {
+      "cardId": "card_06b1155c5a5c4ffa9b6a792e871b264a",
+      "ownerId": "player_caaede61923e483b9e57ff7eb8eae5c8",
+      "handOrder": 3
+    },
+    {
+      "cardId": "card_910ec0e7626a4d6e8e41baec891dd299",
+      "ownerId": "player_5f0b6dd5dec24ffb8f239ef5f42feb1b",
+      "handOrder": 4
+    }
+  ],
+  "turnPlayerId": "player_caaede61923e483b9e57ff7eb8eae5c8",
+  "table": {
+    "format": "parlor.scene",
+    "version": 1,
+    "name": "0.12.1 legacy fixtur",
+    "decks": [
+      {
+        "id": "main",
+        "label": "牌室示例牌",
+        "packId": "parlor-eight",
+        "back": {
+          "label": "PARLOR",
+          "theme": "vermillion-lattice",
+          "color": "#c94d3d",
+          "image": null
+        },
+        "x": 853,
+        "y": 407,
+        "order": [
+          "card_665616b81f094b3d8fca8c1c84936273",
+          "card_8aa909256e724f6f94b96cd4d570bbfe",
+          "card_14ff2b8f4e0c49739aaa0e523f6af391",
+          "card_aa2208cded6f4b0bad99dc893df614e0",
+          "card_dc6ddbafc40f42f78f710d2be55e0b06",
+          "card_3b3c5649713b4cdb93282c7229268120",
+          "card_752ce5f3e2f344f4935b75c0df197277",
+          "card_f44c7ad1feb84d018a99f25febb560fc"
+        ],
+        "locked": false,
+        "z": 1
+      },
+      {
+        "id": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "label": "德州扑克 · 52 张",
+        "packId": "holdem-52",
+        "back": {
+          "label": "PARLOR",
+          "theme": "classic",
+          "color": "#315d47",
+          "image": null
+        },
+        "x": 343,
+        "y": 1548,
+        "order": [
+          "card_25ac78dd47e043368ad433b5f9b9c8fd",
+          "card_4e6341dea9254560be824d8b1a546a25",
+          "card_04f2314297a94ca1852085597e29e74d",
+          "card_54ad112acbe34edf9c37916cd12a75e1",
+          "card_cbc18d2d825a4a5c825bb5e34da00a5b",
+          "card_de65a41243f74032a52e2bb42413c116",
+          "card_5e3cad086ccc4e34a0abfa27c3a795e5",
+          "card_f5db4e0ca2704ded9b77c57d5947cbb0",
+          "card_5219438344a24ed8982fcfb98076f1f0",
+          "card_73fb878aac0d43979256479f358f7eb8",
+          "card_f63b27f2831644f2bb9d6a1e73c11d9e",
+          "card_615251352eea45178676de5af44927d6",
+          "card_9d1a729460f141318024b932dee816ef",
+          "card_e1f68e8a829f476d92e7758b318de6f2",
+          "card_139dffa3a13a49d1b57057457aba0c9f",
+          "card_4396b975cbdb49ce99a133953c6a8d11",
+          "card_5e81e75354204beda7d088e83e55c58c",
+          "card_19798786d1a44ceda055da7c847c4bc7",
+          "card_2d698c9cd1904dd495f0a1c5433f2a6a",
+          "card_e6fd2b14dc78427897d999e553ecb77f",
+          "card_f8b62474436b44a39236304840b6eedf",
+          "card_d9020c388f6f41988bc42e4b1404508e",
+          "card_c67989e00fa846768ea6a0af8df47de0",
+          "card_7966e31b355f461fb5761eadb207536c",
+          "card_bb8d7bde90f94f94b911cd31a236194e",
+          "card_1cb3665591c14373980e043ee4ec8885",
+          "card_9e8d0f8defd545e5a247782a569bb51a",
+          "card_7915aaa021e14551a1453063a12dd3be",
+          "card_d9a59e68cf584a658a9b7e4bb4956be1",
+          "card_98099625ea0f4185abc2acb48ea32c92",
+          "card_adbaab42c1a84bc88d4d534e578e0c4c",
+          "card_1ba40dc0bd99480ebc0e29c01471e9d4",
+          "card_e7070145e75b4716bad97201fa626689",
+          "card_6c655338b1794fedaaff6dd694d06670",
+          "card_d8b1d8816af8470ab04aff021fa37f6d",
+          "card_0f019e8ba3ac42d7accd5e374e1dd219",
+          "card_bbd070830afc4d90a6a86d2e352cf3d5",
+          "card_9e381992b1b34570b9d46db6ab74e3f6",
+          "card_8af1dddb6ff34beabe1bb465999590c0",
+          "card_31d8c8f2594b42c78a481fac6511ceeb",
+          "card_1551ba0188624fb1b741cf0573ed161e",
+          "card_db7195b09ab94580b88133aa088fcb84",
+          "card_e7349d2d9916446bb3738a59788fc4a4",
+          "card_64f894d4c0a94dce99f56a46108b4941",
+          "card_2f73dc99061e48ec938ee29e2dc4c759",
+          "card_54d41da1824d47d9a1f1d6a03ffcecf3",
+          "card_bb0440cd08e14005a2b4ad9f712250d3",
+          "card_345847d540af47cb8fee8e5b83476434"
+        ],
+        "locked": true,
+        "z": 4
+      }
+    ],
+    "cards": [
+      {
+        "id": "card_665616b81f094b3d8fca8c1c84936273",
+        "deckId": "main",
+        "locked": false,
+        "face": {
+          "label": "红桃 A",
+          "rank": "A",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_8aa909256e724f6f94b96cd4d570bbfe",
+        "deckId": "main",
+        "locked": false,
+        "face": {
+          "label": "黑桃 K",
+          "rank": "K",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_14ff2b8f4e0c49739aaa0e523f6af391",
+        "deckId": "main",
+        "locked": false,
+        "face": {
+          "label": "方块 Q",
+          "rank": "Q",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_aa2208cded6f4b0bad99dc893df614e0",
+        "deckId": "main",
+        "locked": false,
+        "face": {
+          "label": "梅花 J",
+          "rank": "J",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_dc6ddbafc40f42f78f710d2be55e0b06",
+        "deckId": "main",
+        "locked": false,
+        "face": {
+          "label": "红桃 10",
+          "rank": "10",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_3b3c5649713b4cdb93282c7229268120",
+        "deckId": "main",
+        "locked": false,
+        "face": {
+          "label": "黑桃 9",
+          "rank": "9",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_752ce5f3e2f344f4935b75c0df197277",
+        "deckId": "main",
+        "locked": false,
+        "face": {
+          "label": "方块 8",
+          "rank": "8",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_f44c7ad1feb84d018a99f25febb560fc",
+        "deckId": "main",
+        "locked": false,
+        "face": {
+          "label": "梅花 7",
+          "rank": "7",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_2d698c9cd1904dd495f0a1c5433f2a6a",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 2",
+          "rank": "2",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_e6fd2b14dc78427897d999e553ecb77f",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 3",
+          "rank": "3",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_5e81e75354204beda7d088e83e55c58c",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 4",
+          "rank": "4",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_54ad112acbe34edf9c37916cd12a75e1",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 5",
+          "rank": "5",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_bb8d7bde90f94f94b911cd31a236194e",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 6",
+          "rank": "6",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_54d41da1824d47d9a1f1d6a03ffcecf3",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 7",
+          "rank": "7",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_0f019e8ba3ac42d7accd5e374e1dd219",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 8",
+          "rank": "8",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_1cf5156b8f524959aadc2651a710ca72",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 9",
+          "rank": "9",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "public",
+        "x": 223,
+        "y": 873,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 6
+      },
+      {
+        "id": "card_e7070145e75b4716bad97201fa626689",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 10",
+          "rank": "10",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_bbd070830afc4d90a6a86d2e352cf3d5",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 J",
+          "rank": "J",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_f8b62474436b44a39236304840b6eedf",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 Q",
+          "rank": "Q",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_adbaab42c1a84bc88d4d534e578e0c4c",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 K",
+          "rank": "K",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_345847d540af47cb8fee8e5b83476434",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "红桃 A",
+          "rank": "A",
+          "suit": "hearts",
+          "symbol": "♥",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_de65a41243f74032a52e2bb42413c116",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 2",
+          "rank": "2",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_73fb878aac0d43979256479f358f7eb8",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 3",
+          "rank": "3",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_7915aaa021e14551a1453063a12dd3be",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 4",
+          "rank": "4",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_d8b1d8816af8470ab04aff021fa37f6d",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 5",
+          "rank": "5",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_e1f68e8a829f476d92e7758b318de6f2",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 6",
+          "rank": "6",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_139dffa3a13a49d1b57057457aba0c9f",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 7",
+          "rank": "7",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_cbc18d2d825a4a5c825bb5e34da00a5b",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 8",
+          "rank": "8",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_bb0440cd08e14005a2b4ad9f712250d3",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 9",
+          "rank": "9",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_7966e31b355f461fb5761eadb207536c",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 10",
+          "rank": "10",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_1551ba0188624fb1b741cf0573ed161e",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 J",
+          "rank": "J",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_db7195b09ab94580b88133aa088fcb84",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 Q",
+          "rank": "Q",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_5e3cad086ccc4e34a0abfa27c3a795e5",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 K",
+          "rank": "K",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_9e8d0f8defd545e5a247782a569bb51a",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "方块 A",
+          "rank": "A",
+          "suit": "diamonds",
+          "symbol": "♦",
+          "tone": "red",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_f5db4e0ca2704ded9b77c57d5947cbb0",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 2",
+          "rank": "2",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_d9a59e68cf584a658a9b7e4bb4956be1",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 3",
+          "rank": "3",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_31d8c8f2594b42c78a481fac6511ceeb",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 4",
+          "rank": "4",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_d9020c388f6f41988bc42e4b1404508e",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 5",
+          "rank": "5",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_64f894d4c0a94dce99f56a46108b4941",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 6",
+          "rank": "6",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_4e6341dea9254560be824d8b1a546a25",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 7",
+          "rank": "7",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_25ac78dd47e043368ad433b5f9b9c8fd",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 8",
+          "rank": "8",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_c67989e00fa846768ea6a0af8df47de0",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 9",
+          "rank": "9",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_9d1a729460f141318024b932dee816ef",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 10",
+          "rank": "10",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_e7349d2d9916446bb3738a59788fc4a4",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 J",
+          "rank": "J",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_6c655338b1794fedaaff6dd694d06670",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 Q",
+          "rank": "Q",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_4396b975cbdb49ce99a133953c6a8d11",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 K",
+          "rank": "K",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_2f73dc99061e48ec938ee29e2dc4c759",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "梅花 A",
+          "rank": "A",
+          "suit": "clubs",
+          "symbol": "♣",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_04f2314297a94ca1852085597e29e74d",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 2",
+          "rank": "2",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_1cb3665591c14373980e043ee4ec8885",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 3",
+          "rank": "3",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_58e10803db7342cf8d2b8e71e2f09d49",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 4",
+          "rank": "4",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "public",
+        "x": 933,
+        "y": 873,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 7
+      },
+      {
+        "id": "card_615251352eea45178676de5af44927d6",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 5",
+          "rank": "5",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_19798786d1a44ceda055da7c847c4bc7",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 6",
+          "rank": "6",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_9e381992b1b34570b9d46db6ab74e3f6",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 7",
+          "rank": "7",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_06b1155c5a5c4ffa9b6a792e871b264a",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 8",
+          "rank": "8",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "public",
+        "x": 1039,
+        "y": 873,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 8
+      },
+      {
+        "id": "card_5219438344a24ed8982fcfb98076f1f0",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 9",
+          "rank": "9",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_8af1dddb6ff34beabe1bb465999590c0",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 10",
+          "rank": "10",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_f63b27f2831644f2bb9d6a1e73c11d9e",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 J",
+          "rank": "J",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_98099625ea0f4185abc2acb48ea32c92",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 Q",
+          "rank": "Q",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_1ba40dc0bd99480ebc0e29c01471e9d4",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 K",
+          "rank": "K",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "deck",
+        "x": null,
+        "y": null,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 0
+      },
+      {
+        "id": "card_910ec0e7626a4d6e8e41baec891dd299",
+        "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+        "locked": false,
+        "face": {
+          "label": "黑桃 A",
+          "rank": "A",
+          "suit": "spades",
+          "symbol": "♠",
+          "tone": "black",
+          "color": null,
+          "textColor": null,
+          "image": null
+        },
+        "zone": "public",
+        "x": 329,
+        "y": 873,
+        "rotation": 0,
+        "faceUp": false,
+        "z": 9
+      }
+    ],
+    "tokens": [
+      {
+        "id": "token_2829bab71d6b4066b27906356b5253c4",
+        "key": "first-player",
+        "label": "起始玩家",
+        "symbol": "Ⅰ",
+        "color": "#e9b94d",
+        "image": null,
+        "x": 420,
+        "y": 560,
+        "homeX": 420,
+        "homeY": 560,
+        "z": 1
+      },
+      {
+        "id": "token_37257fedc6ee48939da1539323f33537",
+        "key": "focus",
+        "label": "焦点标记",
+        "symbol": "◆",
+        "color": "#4388ff",
+        "image": null,
+        "x": 530,
+        "y": 560,
+        "homeX": 530,
+        "homeY": 560,
+        "z": 2
+      },
+      {
+        "id": "token_8adbce76093f4681836a8db9fdf11a7c",
+        "key": "danger",
+        "label": "危险标记",
+        "symbol": "!",
+        "color": "#ff6247",
+        "image": null,
+        "x": 640,
+        "y": 560,
+        "homeX": 640,
+        "homeY": 560,
+        "z": 3
+      }
+    ],
+    "objects": [
+      {
+        "id": "object_63134e61fb8c45e4b1bd70221d5eb884",
+        "kind": "mat",
+        "label": "德州桌垫",
+        "width": 1280,
+        "height": 660,
+        "pattern": "poker",
+        "color": "#315d47",
+        "resourceId": "holdem-mat",
+        "x": 205,
+        "y": 1320,
+        "rotation": 0,
+        "locked": true,
+        "z": 5
+      }
+    ],
+    "components": {
+      "die": {
+        "label": "公共 D6",
+        "sides": 6,
+        "value": null,
+        "rollId": 0,
+        "lastRolledBy": null
+      },
+      "counter": {
+        "label": "回合",
+        "value": 1,
+        "initial": 1,
+        "min": 1,
+        "max": 99
+      }
+    }
+  },
+  "templates": [],
+  "history": [
+    {
+      "id": "04d99abe-fcbd-44c5-ba75-a548ac23f0ac",
+      "at": 1788761288031,
+      "actorId": "player_5f0b6dd5dec24ffb8f239ef5f42feb1b",
+      "actorName": "旧房主",
+      "actorColor": "#ff6247",
+      "label": "开启德州助手：2 人，每人 137 筹码，盲注 2/4",
+      "action": "holdem-setup"
+    },
+    {
+      "id": "7fe73b23-ebe2-410d-aeeb-a984e5c98791",
+      "at": 1788761288032,
+      "actorId": "player_5f0b6dd5dec24ffb8f239ef5f42feb1b",
+      "actorName": "旧房主",
+      "actorColor": "#ff6247",
+      "label": "德州第 1 手：旧房主 坐庄，盲注 2/4",
+      "action": "holdem-start"
+    },
+    {
+      "id": "40e3e2b0-6ad3-47a0-8a6f-282f7067e124",
+      "at": 1788761288032,
+      "actorId": "player_5f0b6dd5dec24ffb8f239ef5f42feb1b",
+      "actorName": "旧房主",
+      "actorColor": "#ff6247",
+      "label": "德州：加注至 17",
+      "action": "holdem-action"
+    }
+  ],
+  "messages": [],
+  "holdem": {
+    "version": 1,
+    "deckId": "deck_a62311ff9c8e43b8b2abaa19930c3bad",
+    "matId": "object_63134e61fb8c45e4b1bd70221d5eb884",
+    "phase": "preflop",
+    "handNumber": 1,
+    "decision": 2,
+    "buyIn": 137,
+    "smallBlind": 2,
+    "bigBlind": 4,
+    "totalChips": 274,
+    "dealerId": "player_5f0b6dd5dec24ffb8f239ef5f42feb1b",
+    "dealerSeat": 0,
+    "smallBlindId": "player_5f0b6dd5dec24ffb8f239ef5f42feb1b",
+    "bigBlindId": "player_caaede61923e483b9e57ff7eb8eae5c8",
+    "actorId": "player_caaede61923e483b9e57ff7eb8eae5c8",
+    "currentBet": 17,
+    "minRaise": 13,
+    "pending": [
+      "player_caaede61923e483b9e57ff7eb8eae5c8"
+    ],
+    "board": [],
+    "burns": [],
+    "players": [
+      {
+        "playerId": "player_5f0b6dd5dec24ffb8f239ef5f42feb1b",
+        "seatIndex": 0,
+        "stack": 120,
+        "committed": 17,
+        "streetBet": 17,
+        "status": "active",
+        "sittingOut": false,
+        "holeCards": [
+          "card_1cf5156b8f524959aadc2651a710ca72",
+          "card_910ec0e7626a4d6e8e41baec891dd299"
+        ],
+        "actedAtBet": 17,
+        "checked": false,
+        "revealed": false,
+        "rank": null
+      },
+      {
+        "playerId": "player_caaede61923e483b9e57ff7eb8eae5c8",
+        "seatIndex": 1,
+        "stack": 133,
+        "committed": 4,
+        "streetBet": 4,
+        "status": "active",
+        "sittingOut": false,
+        "holeCards": [
+          "card_06b1155c5a5c4ffa9b6a792e871b264a",
+          "card_58e10803db7342cf8d2b8e71e2f09d49"
+        ],
+        "actedAtBet": null,
+        "checked": false,
+        "revealed": false,
+        "rank": null
+      }
+    ],
+    "lastPot": 0,
+    "payouts": [],
+    "refunds": [],
+    "pots": [],
+    "showdown": false
+  }
+}

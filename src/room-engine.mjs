@@ -1,5 +1,4 @@
 import { randomInt, randomUUID } from "node:crypto";
-import { HoldemError, createHoldemPack, createHoldemState, planHoldem, remapHoldem, projectHoldem, validateHoldemState } from "./holdem-rules.mjs";
 
 export const TABLE_GEOMETRY = Object.freeze({
   width: 1800,
@@ -143,7 +142,6 @@ export function requestPrivateCards(room, playerId, cardIds, now = Date.now()) {
     throw new RoomError("INVALID_CARD_REQUEST", "每次可以标记 1–12 张私有牌。");
   }
   const cards = cardIds.map((id) => requireCard(room, String(id)));
-  if (cards.some((card) => card.deckId === room.holdem?.deckId)) throw new RoomError("HOLDEM_MANAGED", "德州底牌不能通过标记转交，请在德州面板继续。", 409);
   const ownerId = cards[0].ownerId;
   if (ownerId === actor.id || cards.some((card) => card.zone !== "hand" || card.ownerId !== ownerId)) {
     throw new RoomError("INVALID_CARD_REQUEST", "请选择同一位朋友私人区里的牌。");
@@ -202,7 +200,7 @@ function canControlCard(player, card) {
 
 function requireDeck(room, deckId = "main") {
   const deck = room.decks.get(String(deckId || "main"));
-  if (!deck) throw new RoomError("DECK_NOT_FOUND", "这副牌已经被收起。", 404);
+  if (!deck || deck.hidden) throw new RoomError("DECK_NOT_FOUND", "这副牌已经被收起。", 404);
   return deck;
 }
 
@@ -212,6 +210,32 @@ function assertUnlocked(resource) {
 
 function projectBack(back) {
   return { label: back.label, theme: back.theme, color: back.color, hasImage: Boolean(back.image) };
+}
+
+// A card keeps its own artwork when it changes piles. deckId is its return pile;
+// order is the authoritative, bottom-to-top list of cards inside that pile.
+export function cardSource(room, card) {
+  return card.source || room.decks.get(card.deckId);
+}
+
+export function isExposedDeckCard(room, card) {
+  return card.zone === "deck" && !room.decks.get(card.deckId)?.hidden
+    && room.decks.get(card.deckId)?.order.at(-1) === card.id;
+}
+
+function projectFace(face) {
+  const { image, ...visible } = face;
+  return { ...visible, hasImage: Boolean(image) };
+}
+
+function putCardsOnDeck(room, deck, cards) {
+  for (const card of cards) {
+    const source = cardSource(room, card);
+    card.source = { packId: source.packId, back: structuredClone(source.back) };
+    Object.assign(card, { deckId: deck.id, zone: "deck", ownerId: null, x: null, y: null, z: 0, handOrder: 0 });
+  }
+  deck.order.push(...cards.map((card) => card.id));
+  deck.hidden = false;
 }
 
 function bindMainDeck(room) {
@@ -265,11 +289,12 @@ function returnCardsToDecks(room, cards) {
   rekeyCards(room, cards);
   for (const deck of room.decks.values()) {
     const returned = cards.filter((card) => card.deckId === deck.id).map((card) => card.id);
-    if (returned.length) deck.order = shuffled([...deck.order, ...returned]);
+    if (returned.length) { deck.order = shuffled([...deck.order, ...returned]); deck.hidden = false; }
   }
 }
 
-function spreadStackPositions(cards) {
+function spreadStackPositions(cards, layout = "grid", anchor = cards.at(-1)) {
+  if (!["row", "column", "grid"].includes(layout)) throw new RoomError("INVALID_LAYOUT", "请选择横向、纵向或网格展开。");
   const zone = TABLE_GEOMETRY.publicZone;
   const cardWidth = TABLE_GEOMETRY.cardWidth;
   const cardHeight = TABLE_GEOMETRY.cardHeight;
@@ -289,7 +314,10 @@ function spreadStackPositions(cards) {
     );
   }
   const idealColumns = Math.ceil(Math.sqrt(cards.length * availableWidth / availableHeight));
-  const columns = Math.min(
+  if ((layout === "row" && cards.length > maximumColumns) || (layout === "column" && cards.length > maximumRows)) {
+    throw new RoomError("STACK_TOO_LARGE_TO_SPREAD", "这一叠太长，试试网格展开或先分成小叠。", 409);
+  }
+  const columns = layout === "row" ? cards.length : layout === "column" ? 1 : Math.min(
     maximumColumns,
     cards.length,
     Math.max(1, idealColumns, Math.ceil(cards.length / maximumRows))
@@ -301,16 +329,15 @@ function spreadStackPositions(cards) {
   const verticalStep = rows <= 1
     ? 0
     : Math.min(cardHeight + 20, (availableHeight - cardHeight) / (rows - 1));
-  const anchor = cards.at(-1);
   const rowWidth = cardWidth + horizontalStep * Math.max(0, columns - 1);
   const totalHeight = cardHeight + verticalStep * Math.max(0, rows - 1);
   const startX = clamp(
-    anchor.x - (rowWidth - cardWidth) / 2,
+    layout === "grid" ? anchor.x - (rowWidth - cardWidth) / 2 : anchor.x,
     zone.x + horizontalMargin,
     zone.x + zone.width - rowWidth - horizontalMargin
   );
   const startY = clamp(
-    anchor.y - (totalHeight - cardHeight) / 2,
+    layout === "grid" ? anchor.y - (totalHeight - cardHeight) / 2 : anchor.y,
     zone.y + verticalMargin,
     zone.y + zone.height - totalHeight - verticalMargin
   );
@@ -323,7 +350,6 @@ function spreadStackPositions(cards) {
 
 function removePlayers(room, playerIds) {
   const removedIds = new Set(playerIds);
-  if (room.holdem?.players.some((player) => removedIds.has(player.playerId))) throw new RoomError("HOLDEM_SEAT", "这位玩家仍在德州对局中，请先结束德州助手再释放席位。", 409);
   const returnedCards = [];
 
   for (const card of room.cards.values()) {
@@ -549,7 +575,7 @@ export function validateGamePack(pack) {
     assertPackText(token.key, `${path}.key`, { maximum: 40 });
     assertUniquePackKey(tokenKeys, token.key, `${path}.key`);
     assertPackText(token.label, `${path}.label`, { maximum: 20 });
-    assertPackText(token.symbol, `${path}.symbol`, { maximum: 2 });
+    assertPackText(token.symbol, `${path}.symbol`, { maximum: 8 });
     if (!/^#[0-9a-f]{6}$/i.test(token.color)) invalidPack(`${path}.color 必须是 #RRGGBB 十六进制颜色。`);
     if (!Number.isFinite(token.x) || !Number.isFinite(token.y)) invalidPack(`${path} 的 x 与 y 必须是有限数字。`);
     if (token.image !== undefined) assertAssetPath(token.image, `${path}.image`);
@@ -607,7 +633,6 @@ function captureBoard(room) {
     die: { ...room.die },
     counter: { ...room.counter },
     turn: { ...room.turn },
-    holdem: structuredClone(room.holdem),
     nextHandOrder: room.nextHandOrder,
     nextZ: room.nextZ
   };
@@ -636,7 +661,6 @@ function restoreBoard(room, snapshot) {
   room.die = { ...snapshot.die };
   room.counter = { ...snapshot.counter };
   room.turn = { ...snapshot.turn };
-  room.holdem = structuredClone(snapshot.holdem || null);
   room.nextHandOrder = snapshot.nextHandOrder;
   room.nextZ = snapshot.nextZ;
 }
@@ -693,7 +717,7 @@ export function createRoom({
       id,
       key: String(source.key ?? `token-${index + 1}`).slice(0, 40),
       label: cleanName(source.label, `标记 ${index + 1}`),
-      symbol: Array.from(String(source.symbol ?? "•")).slice(0, 2).join("") || "•",
+      symbol: Array.from(String(source.symbol ?? "•")).slice(0, 8).join("") || "•",
       color: safeTokenColor(source.color),
       image: source.image || null,
       x: initial.x,
@@ -744,7 +768,6 @@ export function createRoom({
     messages: [],
     cardRequests: new Map(),
     commandReceipts: new Map(),
-    holdem: null,
     receiptFloorRevision: -1,
     persistence: { enabled: false, savedAt: null, error: null },
     die: {
@@ -781,8 +804,9 @@ export function createRoom({
   room.decks.set("main", {
     id: "main", label: room.pack.name, packId: room.pack.id,
     back: room.pack.cardBack, x: TABLE_GEOMETRY.deck.x, y: TABLE_GEOMETRY.deck.y,
-    order: room.deckOrder, locked: false, z: 1
+    order: room.deckOrder, locked: false, hidden: false, rotation: 0, z: 1
   });
+  for (const card of cards.values()) card.source = { packId: room.pack.id, back: structuredClone(room.pack.cardBack) };
   return bindMainDeck(room);
 }
 
@@ -801,7 +825,7 @@ export function replaceRoomPack(room, playerId, pack, { randomizeDeck = true } =
   });
 
   room.title = replacement.title;
-  room.holdem = null; room.epoch = randomUUID();
+  room.epoch = randomUUID();
   room.pack = replacement.pack;
   room.cards = replacement.cards;
   room.tokens = replacement.tokens;
@@ -922,10 +946,16 @@ export const RESOURCE_CATALOG = Object.freeze([
   { id: "chessboard", kind: "mat", label: "方格棋盘", description: "一块 8 × 8 的自由棋盘", width: 640, height: 640, pattern: "checker", color: "#8ba995" },
   { id: "playmat", kind: "mat", label: "游戏桌垫", description: "在世界里圈一块自己的地盘", width: 960, height: 660, pattern: "plain", color: "#527565" },
   { id: "holdem-mat", kind: "mat", label: "德州桌垫", description: "五张公共牌与底池的位置", width: 1280, height: 660, pattern: "poker", color: "#315d47" },
+  { id: "holdem-guide", kind: "note", label: "德州规则指引", description: "一张可编辑的参考牌，玩法由同桌约定", width: 400, height: 520, color: "#ede3c9",
+    text: "德州扑克 · 常见玩法\n\n准备｜52 张扑克，不含大小王。自行分发筹码，用庄家钮标记庄家，约定大小盲。\n\n发牌｜每人两张底牌。依次进行：底牌下注 → 翻牌三张 → 转牌一张 → 河牌一张；每次发公共牌前通常先烧一张。每轮可过牌、跟注、加注或弃牌，按桌上约定进行。\n\n摊牌｜用两张底牌与五张公共牌中的任意五张组成最佳牌型。\n\n由大到小｜同花顺、四条、葫芦、同花、顺子、三条、两对、一对、高牌。A 可组成 A2345 或 TJQKA 顺子。\n\n筹码｜玩家自行下注、分池和结算。全下、边池、平分与零头的处理，开局前一起约定。\n\n这张牌仅供参考，可双击改写。" },
   { id: "token-black", kind: "token", label: "黑棋子", description: "五子棋、跳棋，或者占个位", symbol: "", color: "#29312e" },
   { id: "token-white", kind: "token", label: "白棋子", description: "有黑就有白", symbol: "", color: "#eee8d9" },
-  { id: "token-red", kind: "token", label: "红筹码", description: "筹码、血量、行动点", symbol: "1", color: "#c96554" },
-  { id: "token-green", kind: "token", label: "绿筹码", description: "想怎么数，就怎么数", symbol: "5", color: "#568775" },
+  { id: "token-red", kind: "token", label: "红筹码 · 1", description: "德州、计分，自行发放与移动", symbol: "1", color: "#c96554" },
+  { id: "token-green", kind: "token", label: "绿筹码 · 5", description: "德州、计分，自行发放与移动", symbol: "5", color: "#568775" },
+  { id: "chip-25", kind: "token", label: "蓝筹码 · 25", description: "德州、计分，自行发放与移动", symbol: "25", color: "#5d809b" },
+  { id: "chip-100", kind: "token", label: "黑筹码 · 100", description: "德州、计分，自行发放与移动", symbol: "100", color: "#414946" },
+  { id: "chip-500", kind: "token", label: "紫筹码 · 500", description: "德州、计分，自行发放与移动", symbol: "500", color: "#937599" },
+  { id: "dealer-button", kind: "token", label: "庄家钮", description: "德州庄家标记，自己传给下一位", symbol: "庄", color: "#eee8d9" },
   { id: "coin", kind: "token", label: "金币", description: "给冒险添一点奖励", symbol: "P", color: "#d3ac5f" }
 ]);
 
@@ -968,7 +998,7 @@ function requireResource(room, type, id) {
   const map = type === "card" ? room.cards : type === "token" ? room.tokens : type === "deck" ? room.decks : type === "object" ? room.objects : null;
   const resource = map?.get(String(id));
   if (!resource) throw new RoomError("RESOURCE_NOT_FOUND", "这个物件已经不在桌上。", 404);
-  if (resource.bagId || (type === "card" && ["deck", "bag"].includes(resource.zone))) {
+  if (resource.bagId || resource.hidden || (type === "card" && ["deck", "bag"].includes(resource.zone))) {
     throw new RoomError("RESOURCE_HIDDEN", "先从容器取出这个物件。", 403);
   }
   return { map, resource };
@@ -991,6 +1021,73 @@ function objectDropPoint(command, object) {
 
 function applyResourceCommand(room, actor, command) {
   const commit = (label, createdResource) => { addHistory(room, actor, label); touch(room); return createdResource ? { createdResource } : true; };
+  if (command.type === "stack-onto") {
+    if (!["card", "stack", "deck"].includes(command.resourceType) || !["card", "deck"].includes(command.targetType)) {
+      throw new RoomError("INVALID_TARGET", "只能把卡牌叠到公共牌或牌堆上。");
+    }
+    const publicPile = (id) => {
+      const card = requireCard(room, String(id));
+      if (card.zone !== "public") throw new RoomError("CARD_NOT_PUBLIC", "只能叠到公共区的牌上。");
+      try { return publicStackForCard(room, card.id); }
+      catch (error) { if (error.code === "STACK_TOO_SMALL") return [card]; throw error; }
+    };
+    const sourceDeck = command.resourceType === "deck" ? requireDeck(room, command.resourceId) : null;
+    const sourceCards = sourceDeck ? sourceDeck.order.map((id) => requireCard(room, id))
+      : command.resourceType === "stack" ? publicStackForCard(room, String(command.resourceId))
+      : [requireControllableResource(room, actor, "card", command.resourceId).resource];
+    if (!sourceCards.length) throw new RoomError("DECK_EMPTY", "这叠牌已经空了。", 409);
+    if (sourceDeck) assertUnlocked(sourceDeck);
+    sourceCards.forEach(assertUnlocked);
+    const targetCards = command.targetType === "card" ? publicPile(command.targetId) : [];
+    targetCards.forEach(assertUnlocked);
+    const sourceIds = new Set(sourceCards.map((card) => card.id));
+    let deck = command.targetType === "deck" ? requireDeck(room, command.targetId) : null;
+    if ((sourceDeck && deck === sourceDeck) || targetCards.some((card) => sourceIds.has(card.id))) {
+      throw new RoomError("SAME_PILE", "这些牌已经在同一叠里。", 409);
+    }
+    if (!deck) {
+      const anchor = targetCards.at(-1), origin = cardSource(room, anchor);
+      const home = room.decks.get(anchor.deckId);
+      if (!sourceDeck && !home?.hidden) checkResourceCapacity(room, 0, 0, 1);
+      deck = sourceDeck || (home?.hidden ? home : {
+        id: `deck_${randomUUID().replaceAll("-", "")}`, label: home?.label || "牌堆",
+        packId: origin.packId, back: structuredClone(origin.back), locked: false, rotation: 0, order: []
+      });
+    }
+    // All validation precedes the undo point: one drop is one atomic change.
+    saveUndoPoint(room);
+    if (targetCards.length) {
+      const anchor = targetCards.at(-1);
+      Object.assign(deck, { x: anchor.x, y: anchor.y, z: room.nextZ++, order: [] });
+      room.decks.set(deck.id, deck);
+      putCardsOnDeck(room, deck, targetCards);
+    }
+    putCardsOnDeck(room, deck, sourceCards);
+    if (sourceDeck && sourceDeck !== deck) {
+      sourceDeck.order = [];
+      // Cards outside the merged pile also need a valid place to return to.
+      for (const card of room.cards.values()) if (card.deckId === sourceDeck.id) {
+        const source = cardSource(room, card);
+        card.source = { packId: source.packId, back: structuredClone(source.back) };
+        card.deckId = deck.id;
+      }
+      if (sourceDeck.id === "main") sourceDeck.hidden = true;
+      else room.decks.delete(sourceDeck.id);
+    }
+    return commit(`将 ${sourceCards.length} 张牌叠到了「${deck.label}」顶部`, { type: "deck", id: deck.id });
+  }
+  if (command.type === "spread-deck") {
+    const deck = requireDeck(room, command.deckId);
+    assertUnlocked(deck);
+    const cards = [...deck.order].reverse().map((id) => requireCard(room, id));
+    if (!cards.length) throw new RoomError("DECK_EMPTY", "这叠牌已经空了。", 409);
+    const layout = command.layout || "row";
+    const positions = spreadStackPositions(cards, layout, { x: deck.x + TABLE_GEOMETRY.cardWidth + 24, y: deck.y });
+    saveUndoPoint(room);
+    deck.order = [];
+    for (const { card, x, y } of positions) Object.assign(card, { zone: "public", ownerId: null, x, y, z: room.nextZ++ });
+    return commit(`将「${deck.label}」的 ${cards.length} 张牌${layout === "column" ? "纵向" : layout === "row" ? "横向" : "网格"}展开`);
+  }
   if (command.type === "save-template") {
     if (room.templates.size >= 40) throw new RoomError("LIBRARY_FULL", "本桌最多保存 40 件资源，先移除一些再保存。", 409);
     const { resource } = requireControllableResource(room, actor, command.resourceType, command.resourceId);
@@ -1046,7 +1143,7 @@ function applyResourceCommand(room, actor, command) {
     const id = `${preset.kind}_${randomUUID().replaceAll("-", "")}`;
     const object = { ...preset, id, resourceId: preset.id, ...point, rotation: 0, locked: false };
     delete object.description;
-    if (preset.kind === "note") object.text = "";
+    if (preset.kind === "note") object.text = preset.text || "";
     if (["die", "counter"].includes(preset.kind)) { object.value = preset.kind === "die" ? null : 0; object.rollId = 0; }
     if (preset.kind === "bag") object.contents = [];
     saveUndoPoint(room);
@@ -1135,13 +1232,12 @@ function applyResourceCommand(room, actor, command) {
 
   if (command.type === "collect-deck") {
     const deck = requireDeck(room, command.deckId);
-    const cards = [...room.cards.values()].filter((card) => card.deckId === deck.id && card.zone === "public");
+    const cards = [...room.cards.values()].filter((card) => card.deckId === deck.id && card.zone === "public").sort((left, right) => left.z - right.z);
     if (!cards.length) throw new RoomError("NO_PUBLIC_CARDS", "这副牌没有散落在桌上的牌。", 409);
     cards.forEach(assertUnlocked);
     saveUndoPoint(room);
-    for (const card of cards) Object.assign(card, { zone: "deck", ownerId: null, x: null, y: null, rotation: 0, faceUp: false, z: 0, handOrder: 0 });
-    returnCardsToDecks(room, cards);
-    return commit(`收回了「${deck.label}」的 ${cards.length} 张公共牌`);
+    putCardsOnDeck(room, deck, cards);
+    return commit(`将「${deck.label}」的 ${cards.length} 张散牌叠回顶部`);
   }
 
   if (command.type === "bag-put") {
@@ -1187,107 +1283,7 @@ function applyResourceCommand(room, actor, command) {
   return false;
 }
 
-function guardHoldemResources(room, playerId, command) {
-  const holdem = room.holdem;
-  if (!holdem || typeof command?.type === "string" && command.type.startsWith("holdem-")) return;
-  const fail = () => { throw new RoomError("HOLDEM_MANAGED", "这副牌由德州助手管理；底牌可以在自己的私人区整理。请用德州面板继续这一手。", 409); };
-  if (["reset", "collect-public", "tidy-public", "set-turn", "advance-turn", "random-turn"].includes(command?.type)) fail();
-  let cards = command?.cardId ? [room.cards.get(command.cardId)].filter(Boolean) : [];
-  if (["move-stack", "draw-stack", "shuffle-stack", "spread-stack"].includes(command?.type) && cards[0]?.zone === "public") cards = publicStackForCard(room, command.cardId);
-  if (command?.type === "accept-card-request") {
-    const request = [...room.cardRequests.values()].find((item) => item.id === command.requestId);
-    cards = (request?.cardIds || []).map((id) => room.cards.get(id)).filter(Boolean);
-  }
-  if (command?.resourceType === "card") cards.push(room.cards.get(command.resourceId));
-  if (cards.some((card) => card?.deckId === holdem.deckId)) {
-    const card = cards[0];
-    const ownPrivateMove = card?.zone === "hand" && card.ownerId === playerId && (
-      command.type === "rotate-card" || command.type === "move-card" && command.target === "hand" && (!command.ownerId || command.ownerId === playerId));
-    if (!ownPrivateMove) fail();
-  }
-  if (command?.deckId === holdem.deckId || [holdem.deckId, holdem.matId].includes(command?.resourceId)) fail();
-}
-
-function syncHoldemCards(room, state, order, { resetCards = false } = {}) {
-  const deck = room.decks.get(state.deckId), mat = room.objects.get(state.matId);
-  const hands = new Map(state.players.flatMap((player) => player.holeCards.map((id) => [id, player])));
-  for (const card of room.cards.values()) {
-    if (card.deckId !== state.deckId) continue;
-    const hand = hands.get(card.id), boardIndex = state.board.indexOf(card.id), burnIndex = state.burns.indexOf(card.id);
-    if (hand && !hand.revealed) {
-      if (resetCards || card.zone !== "hand" || card.ownerId !== hand.playerId) placeInHand(room, card, hand.playerId);
-    } else if (hand?.revealed) {
-      if (card.zone !== "public") Object.assign(card, privateCardPosition(room, card), { zone: "public", ownerId: null, faceUp: true, z: room.nextZ++ });
-      card.faceUp = true;
-    } else if (boardIndex >= 0 || burnIndex >= 0) {
-      const index = boardIndex >= 0 ? boardIndex : burnIndex;
-      if (card.zone !== "public" || resetCards) card.z = room.nextZ++;
-      Object.assign(card, { zone: "public", ownerId: null, faceUp: boardIndex >= 0, rotation: 0, handOrder: 0,
-        x: boardIndex >= 0 ? mat.x + 370 + index * 108 : deck.x + 125 + index * 3,
-        y: boardIndex >= 0 ? mat.y + 228 : deck.y + index * 3 });
-    } else Object.assign(card, { zone: "deck", ownerId: null, x: null, y: null, faceUp: false, rotation: 0, z: 0, handOrder: 0 });
-    card.locked = false;
-  }
-  deck.order = order; room.holdem = state; room.turn.activePlayerId = state.actorId;
-  room.cardRequests.clear();
-}
-
-function applyHoldemTableCommand(room, actor, command) {
-  try {
-    if (command.type === "holdem-setup") {
-      if (actor.role !== "host") throw new RoomError("HOST_ONLY", "由房主开启德州助手。", 403);
-      if (room.holdem) throw new RoomError("HOLDEM_EXISTS", "这桌已经有德州助手了。", 409);
-      const ids = command.playerIds || [...room.players.keys()];
-      if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) throw new RoomError("HOLDEM_PLAYERS", "请先选择参加德州的玩家。");
-      const state = createHoldemState(ids.map((id) => requirePlayer(room, id)), command);
-      checkResourceCapacity(room, 52, 1, 1);
-      const prepared = createRoom({ code: "HOLDEM", pack: createHoldemPack(), randomizeDeck: false });
-      const preset = RESOURCE_CATALOG.find((entry) => entry.id === "holdem-mat");
-      const point = objectDropPoint({ x: command.x ?? 205, y: command.y ?? 1320 }, preset);
-      const deckId = `deck_${randomUUID().replaceAll("-", "")}`, matId = `object_${randomUUID().replaceAll("-", "")}`;
-      const deck = { ...prepared.decks.get("main"), id: deckId, x: point.x + 138, y: point.y + 228, locked: true };
-      const mat = { ...preset, resourceId: preset.id, id: matId, ...point, rotation: 0, locked: true };
-      delete mat.description;
-      saveUndoPoint(room);
-      deck.z = room.nextZ++; mat.z = room.nextZ++;
-      for (const card of prepared.cards.values()) { card.deckId = deckId; room.cards.set(card.id, card); }
-      room.decks.set(deckId, deck); room.objects.set(matId, mat);
-      state.deckId = deckId; state.matId = matId; room.holdem = state;
-      addHistory(room, actor, `开启德州助手：${state.players.length} 人，每人 ${state.buyIn} 筹码，盲注 ${state.smallBlind}/${state.bigBlind}`);
-      touch(room); return { createdResource: { type: "object", id: matId } };
-    }
-    if (!room.holdem) throw new RoomError("NO_HOLDEM", "请先开启德州助手。", 409);
-    if (command.decision !== undefined && command.decision !== room.holdem.decision) throw new RoomError("HOLDEM_STALE", "行动轮次已经变化，这项旧操作没有执行，请确认当前牌局。", 409);
-    const cards = [...room.cards.values()].filter((card) => card.deckId === room.holdem.deckId);
-    if (command.type === "holdem-close") {
-      if (actor.role !== "host") throw new RoomError("HOST_ONLY", "由房主结束德州助手。", 403);
-      if (!["waiting", "complete"].includes(room.holdem.phase)) throw new RoomError("HOLDEM_IN_PROGRESS", "请先完成当前这一手，再结束德州助手。", 409);
-      saveUndoPoint(room);
-      const deck = room.decks.get(room.holdem.deckId);
-      for (const card of cards) Object.assign(card, { zone: "deck", ownerId: null, x: null, y: null, faceUp: false, rotation: 0, handOrder: 0, locked: false });
-      rekeyCards(room, cards); deck.order = shuffled(cards.map((card) => card.id)); deck.locked = false;
-      room.objects.get(room.holdem.matId).locked = false; room.holdem = null; room.turn.activePlayerId = null;
-      addHistory(room, actor, "结束德州助手，牌盒与桌垫留在桌上"); touch(room); return;
-    }
-    const result = planHoldem(room.holdem, command, { actor, players: [...room.players.values()], faceForCard: (id) => room.cards.get(id)?.face,
-      deckOrder: command.type === "holdem-start" ? shuffled(cards.map((card) => card.id)) : room.decks.get(room.holdem.deckId).order });
-    saveUndoPoint(room);
-    if (result.resetCards) {
-      const oldIds = cards.map((card) => card.id);
-      rekeyCards(room, cards);
-      const mapping = new Map(cards.map((card, index) => [oldIds[index], card.id]));
-      result.state = remapHoldem(result.state, mapping); result.deckOrder = result.deckOrder.map((id) => mapping.get(id));
-    }
-    syncHoldemCards(room, result.state, result.deckOrder, result);
-    addHistory(room, actor, result.label); touch(room);
-  } catch (error) {
-    if (error instanceof HoldemError) throw new RoomError(error.code, error.message, error.status);
-    throw error;
-  }
-}
-
 export function applyCommand(room, playerId, command) {
-  guardHoldemResources(room, playerId, command);
   const previousId = room.history.at(-1)?.id;
   const previousUndo = room.undoStack.at(-1);
   const source = command?.type === "shuffle" ? room.decks.get(String(command.deckId || "main"))
@@ -1310,7 +1306,6 @@ function applyTabletopCommand(room, playerId, command) {
     throw new RoomError("INVALID_COMMAND", "无法识别这次操作。");
   }
 
-  if (command.type.startsWith("holdem-")) return applyHoldemTableCommand(room, actor, command);
 
   const resourceResult = applyResourceCommand(room, actor, command);
   if (resourceResult) return resourceResult === true ? undefined : resourceResult;
@@ -1431,12 +1426,12 @@ function applyTabletopCommand(room, playerId, command) {
     card.ownerId = actor.id;
     card.x = point.x;
     card.y = point.y;
-    card.rotation = clamp(Number(command.rotation) || 0, -180, 180);
-    card.faceUp = false;
+    card.rotation = command.rotation === undefined ? card.rotation : clamp(Number(command.rotation) || 0, -180, 180);
+    if (typeof command.faceUp === "boolean") card.faceUp = command.faceUp;
     card.z = room.nextZ;
     card.handOrder = 0;
     room.nextZ += 1;
-    addHistory(room, actor, "从牌叠盖放了一张牌");
+    addHistory(room, actor, `从牌叠取了一张${card.faceUp ? "正面" : "背面"}朝上的牌`);
     touch(room);
     return;
   }
@@ -1553,7 +1548,6 @@ function applyTabletopCommand(room, playerId, command) {
       card.x = anchor.x + Math.min(index, 4) * 0.8;
       card.y = anchor.y + Math.min(index, 4) * 0.8;
       card.rotation = 0;
-      card.faceUp = false;
       card.z = room.nextZ;
       card.handOrder = 0;
       room.nextZ += 1;
@@ -1577,12 +1571,11 @@ function applyTabletopCommand(room, playerId, command) {
   if (command.type === "spread-stack") {
     const cards = publicStackForCard(room, String(command.cardId ?? ""));
     cards.forEach(assertUnlocked);
-    const positions = spreadStackPositions(cards);
+    const positions = spreadStackPositions([...cards].reverse(), command.layout || "row");
     saveUndoPoint(room);
     positions.forEach(({ card, x, y }, index) => {
       card.x = x;
       card.y = y;
-      card.rotation = (index - (cards.length - 1) / 2) * 1.2;
       card.z = room.nextZ;
       room.nextZ += 1;
     });
@@ -1668,24 +1661,17 @@ function applyTabletopCommand(room, playerId, command) {
 
   if (command.type === "collect-public") {
     if (actor.role !== "host") throw new RoomError("HOST_ONLY", "只有房主可以收回公共牌。", 403);
-    const publicCards = [...room.cards.values()].filter((card) => card.zone === "public");
+    const publicCards = [...room.cards.values()].filter((card) => card.zone === "public").sort((left, right) => left.z - right.z);
     if (publicCards.length === 0) {
       throw new RoomError("NO_PUBLIC_CARDS", "公共区还没有可以收回的牌。", 409);
     }
     publicCards.forEach(assertUnlocked);
     saveUndoPoint(room);
-    publicCards.forEach((card) => {
-      card.zone = "deck";
-      card.ownerId = null;
-      card.x = null;
-      card.y = null;
-      card.rotation = 0;
-      card.faceUp = false;
-      card.z = 0;
-      card.handOrder = 0;
-    });
-    returnCardsToDecks(room, publicCards);
-    addHistory(room, actor, `把 ${publicCards.length} 张公共牌洗回牌叠`);
+    for (const deck of room.decks.values()) {
+      const cards = publicCards.filter((card) => card.deckId === deck.id);
+      if (cards.length) putCardsOnDeck(room, deck, cards);
+    }
+    addHistory(room, actor, `把 ${publicCards.length} 张公共牌叠回各自牌堆顶部`);
     touch(room);
     return;
   }
@@ -1799,10 +1785,6 @@ export function exportRoomScene(room, playerId, name = room.title) {
   if (requirePlayer(room, playerId).role !== "host") throw new RoomError("HOST_ONLY", "只有房主可以保存整个桌面。", 403);
   const board = captureBoard(room);
   const decks = board.decks.map(([, deck]) => deck);
-  if (board.holdem) {
-    decks.find((deck) => deck.id === board.holdem.deckId).locked = false;
-    board.objects.find(([id]) => id === board.holdem.matId)[1].locked = false;
-  }
   const cards = board.cards.map(({ ownerId, handOrder, ...card }) => {
     if (card.zone === "hand") {
       Object.assign(card, { zone: "deck", x: null, y: null, rotation: 0, faceUp: false, locked: false, z: 0 });
@@ -1844,15 +1826,23 @@ export function validateRoomScene(scene) {
     return value;
   };
   const image = (value) => { if (value) assertAssetPath(value, "图片"); return value || null; };
+  const readSource = (source) => {
+    if (!source?.back || typeof source.packId !== "string" || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(source.packId)) fail("卡牌图片来源无效。");
+    return { packId: source.packId, back: {
+      label: cleanName(source.back.label, "PARLOR"), theme: cleanName(source.back.theme, "default"),
+      color: color(source.back.color), image: image(source.back.image)
+    } };
+  };
   const decks = scene.decks.map((source) => {
     if (!source || !source.back || !Array.isArray(source.order)) fail("牌盒结构不完整。");
     if (typeof source.packId !== "string" || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(source.packId)) fail("牌盒来源无效。");
     return {
-      id: readId(source.id), label: cleanName(source.label, "牌盒"), packId: source.packId, ...position(source), order: [...source.order],
+      id: readId(source.id), label: cleanName(source.label, "牌盒"), packId: source.packId, ...position(source), order: [...source.order], hidden: source.hidden === true,
       back: { label: cleanName(source.back.label, "PARLOR"), theme: cleanName(source.back.theme, "default"), color: color(source.back.color), image: image(source.back.image) }
     };
   });
   if (!decks.some((deck) => deck.id === "main")) fail("缺少起始牌盒。");
+  if (decks.some((deck) => deck.hidden && deck.order.length)) fail("收起的牌堆不能仍装着牌。");
   const deckIds = new Set(decks.map((deck) => deck.id));
   const cards = scene.cards.map((source, index) => {
     if (!source?.face || !deckIds.has(source.deckId) || !["deck", "public", "bag"].includes(source.zone)) fail("卡牌区域或来源无效。");
@@ -1866,9 +1856,9 @@ export function validateRoomScene(scene) {
     });
     for (const key of ["color", "textColor", "image"]) if (face[key] === undefined) face[key] = null;
     return {
-      id: readId(source.id), deckId: source.deckId, face, zone: source.zone,
-      ...(source.zone === "public" ? position(source) : { x: null, y: null, z: 0, rotation: 0, locked: false }),
-      ownerId: null, handOrder: 0, faceUp: source.zone === "public" && source.faceUp === true,
+      id: readId(source.id), deckId: source.deckId, source: readSource(source.source || decks.find((deck) => deck.id === source.deckId)), face, zone: source.zone,
+      ...(source.zone === "public" ? position(source) : { x: null, y: null, z: 0, rotation: finite(source.rotation || 0, -180, 180), locked: false }),
+      ownerId: null, handOrder: 0, faceUp: source.zone !== "bag" && source.faceUp === true,
       ...(source.zone === "bag" ? { bagId: String(source.bagId || "") } : {})
     };
   });
@@ -1876,7 +1866,7 @@ export function validateRoomScene(scene) {
     if (!source) fail("标记无效。");
     return {
       id: readId(source.id), key: cleanName(source.key, "token"), label: cleanName(source.label, "标记"),
-      symbol: Array.from(String(source.symbol ?? "")).slice(0, 2).join(""), color: color(source.color),
+      symbol: Array.from(String(source.symbol ?? "")).slice(0, 8).join(""), color: color(source.color),
       ...position(source), homeX: finite(source.homeX ?? source.x, -4500, 6300), homeY: finite(source.homeY ?? source.y, -3000, 4100),
       image: image(source.image), packId: typeof source.packId === "string" ? source.packId.slice(0, 40) : undefined,
       ...(source.bagId ? { bagId: String(source.bagId) } : {})
@@ -1954,7 +1944,6 @@ export function restoreRoomScene(room, playerId, scene) {
   for (const card of loaded.cards) card.id = newCardIds.get(card.id);
   saveUndoPoint(room);
   room.epoch = randomUUID();
-  room.holdem = null;
   room.cards = new Map(loaded.cards.map((card) => [card.id, card]));
   room.decks = new Map(loaded.decks.map((deck) => [deck.id, deck]));
   room.tokens = new Map(loaded.tokens.map((token) => [token.id, token]));
@@ -2001,7 +1990,7 @@ function snapshotRoomGame(room, name = room.title) {
       components: { die: { ...board.die }, counter: { ...board.counter } }
     },
     templates: board.templates.map(([, template]) => template),
-    history: structuredClone(room.history), messages: structuredClone(room.messages), holdem: structuredClone(room.holdem)
+    history: structuredClone(room.history), messages: structuredClone(room.messages)
   };
 }
 
@@ -2085,9 +2074,41 @@ export function validateRoomGame(game, { allowEmpty = false } = {}) {
     return { id: message.id, playerId: message.playerId, at: message.at, text: message.text,
       name: cleanName(message.name, "玩家"), color: safeTokenColor(message.color) };
   });
-  let holdem;
-  try { holdem = validateHoldemState(game.holdem, { players, ...table }); } catch (error) { fail(error.message); }
-  return { gameId: game.gameId, name: cleanName(game.name, table.name), maxPlayers: game.maxPlayers, players, table, templates, history, messages, holdem, turnPlayerId: game.turnPlayerId || null };
+  if (game.holdem) migrateLegacyHoldem(game.holdem, { players, table, history, fail });
+  return { gameId: game.gameId, name: cleanName(game.name, table.name), maxPlayers: game.maxPlayers, players, table, templates, history, messages,
+    turnPlayerId: game.holdem ? null : game.turnPlayerId || null };
+}
+
+// Read old saves without retaining an executable betting/rules system.
+function migrateLegacyHoldem(legacy, { players, table, history, fail }) {
+  const deck = table.decks.find((entry) => entry.id === legacy.deckId);
+  const mat = table.objects.find((entry) => entry.id === legacy.matId);
+  if (!deck || !mat || !Array.isArray(legacy.players) || legacy.players.length > 8) fail("旧德州资源记录不完整。");
+  const seen = new Set();
+  const balances = legacy.players.map((entry) => {
+    const player = players.find((candidate) => candidate.id === entry.playerId);
+    if (!player || seen.has(player.id) || ![entry.stack, entry.committed].every((n) => Number.isSafeInteger(n) && n >= 0 && n <= 8_000_000)) fail("旧德州筹码记录无效。");
+    seen.add(player.id);
+    return { player, stack: entry.stack, committed: entry.committed };
+  });
+  if (balances.reduce((sum, entry) => sum + entry.stack + entry.committed, 0) !== legacy.totalChips) fail("旧德州筹码总数不一致。");
+  deck.locked = false; mat.locked = false;
+  for (const card of table.cards) if (card.deckId === deck.id) card.locked = false;
+  let z = Math.max(0, ...[...table.cards, ...table.decks, ...table.objects, ...table.tokens].map((item) => item.z)) + 1;
+  for (const { player, stack, committed } of balances) {
+    for (const [index, amount] of [stack, committed].entries()) {
+      if (!amount || table.tokens.length + table.objects.length >= 240) continue;
+      const point = publicTokenDropPoint({ x: player.privateZone.x + 100 + index * 90, y: player.privateZone.y + player.privateZone.height - 90 });
+      table.tokens.push({ id: `token_${randomUUID().replaceAll("-", "")}`, key: "legacy-chips",
+        label: cleanName(`${player.name} · ${index ? "已下注" : "余筹"}`, "筹码"), symbol: String(amount), color: player.color,
+        ...point, homeX: point.x, homeY: point.y, z: z++, rotation: 0, locked: false, image: null });
+    }
+  }
+  // The audit retains every balance even if an old table is at object capacity.
+  const host = players.find((player) => player.role === "host");
+  history.push({ id: randomUUID(), at: Date.now(), actorId: host?.id || players[0].id, actorName: host?.name || "房主", actorColor: host?.color || "#568775",
+    action: "legacy-resources", label: `旧德州已改为自由桌面，筹码（余筹 / 已下注）：${balances.map(({ player, stack, committed }) => `${player.name} ${stack} / ${committed}`).join("；")}。` });
+  if (history.length > 500) history.splice(0, history.length - 500);
 }
 
 function installGameBoard(room, loaded, playerMap = new Map(), { rekey = false } = {}) {
@@ -2106,7 +2127,6 @@ function installGameBoard(room, loaded, playerMap = new Map(), { rekey = false }
   room.templates = new Map(loaded.templates.map((template) => [template.id, { ...template, creatorId: playerMap.get(template.creatorId) || template.creatorId }]));
   room.die = table.components.die; room.counter = table.components.counter;
   room.turn = { activePlayerId: playerMap.get(loaded.turnPlayerId) || loaded.turnPlayerId };
-  room.holdem = remapHoldem(loaded.holdem, cardMap, playerMap);
   room.title = loaded.name; room.gameId = loaded.gameId; room.maxPlayers = loaded.maxPlayers;
   const main = room.decks.get("main");
   room.pack = { id: main.packId, name: main.label, version: 1, cardBack: main.back };
@@ -2212,8 +2232,7 @@ export function projectRoom(room, viewerId) {
       return {
         id: card.id,
         deckId: card.deckId,
-        managedBy: card.deckId === room.holdem?.deckId ? "holdem" : null,
-        back: projectBack(requireDeck(room, card.deckId).back),
+        back: projectBack(cardSource(room, card).back),
         locked: Boolean(card.locked),
         zone: card.zone,
         ownerId: card.ownerId,
@@ -2235,7 +2254,7 @@ export function projectRoom(room, viewerId) {
               hasImage: Boolean(card.face.image)
             }
           : null,
-        canControl: card.deckId === room.holdem?.deckId ? card.zone === "hand" && card.ownerId === viewer.id : canControlCard(viewer, card)
+        canControl: canControlCard(viewer, card)
       };
     });
 
@@ -2302,10 +2321,14 @@ export function projectRoom(room, viewerId) {
     },
     cards,
     tokens,
-    decks: [...room.decks.values()].map((deck) => ({
+    decks: [...room.decks.values()].filter((deck) => !deck.hidden).map((deck) => ({
       id: deck.id, label: deck.label, packId: deck.packId, back: projectBack(deck.back),
       x: deck.x, y: deck.y, z: deck.z, locked: Boolean(deck.locked),
-      count: deck.order.length, canDraw: deck.order.length > 0 && deck.id !== room.holdem?.deckId, managedBy: deck.id === room.holdem?.deckId ? "holdem" : null,
+      count: deck.order.length, canDraw: deck.order.length > 0,
+      top: deck.order.length ? (() => {
+        const card = room.cards.get(deck.order.at(-1));
+        return { id: card.id, faceUp: card.faceUp, rotation: card.rotation, back: projectBack(cardSource(room, card).back), face: card.faceUp ? projectFace(card.face) : null };
+      })() : null,
       publicCount: [...room.cards.values()].filter((card) => card.deckId === deck.id && card.zone === "public").length
     })),
     objects: [...room.objects.values()].filter((object) => !object.bagId).map(({ contents, ...object }) => ({
@@ -2318,7 +2341,6 @@ export function projectRoom(room, viewerId) {
     turn: { ...room.turn },
     canUndo: viewer.role === "host" && room.undoStack.length > 0,
     persistence: { ...room.persistence },
-    holdem: projectHoldem(room.holdem, viewerId),
     history: room.history.slice(-500)
   };
 }

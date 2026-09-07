@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRoom, RoomError, exportRoomCheckpoint, roomFromCheckpoint } from "../src/room-engine.mjs";
+import { createRoom, RoomError, exportRoomCheckpoint, roomFromCheckpoint, joinRoom, applyCommand, addRoomPack, projectRoom } from "../src/room-engine.mjs";
 import { createRoomTransport } from "../src/room-transport.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -83,6 +83,46 @@ function lastRoomState(response) {
 function messageBody(roomCode, sessionToken, message) {
   return { roomCode, sessionToken, message };
 }
+
+test("mixed pile artwork follows each card's source and covered faces cannot be fetched", async (t) => {
+  const firstPack = structuredClone(pack);
+  firstPack.cardBack.image = "art/back-a.png";
+  firstPack.cards.forEach((card) => { card.image = "art/front-a.png"; });
+  const secondPack = { ...structuredClone(firstPack), id: "other-art", cards: [structuredClone(firstPack.cards[0])] };
+  secondPack.cardBack.image = "art/back-b.png";
+  secondPack.cards[0].image = "art/front-b.png";
+  secondPack.cards[0].label = "另一副牌的正面";
+  const room = createRoom({ code: "ART-PILE", pack: firstPack, hostSecret: "test-only", randomizeDeck: false });
+  const host = joinRoom(room, { hostSecret: room.hostSecret }), guest = joinRoom(room, { displayName: "朋友" });
+  const command = (value) => applyCommand(room, host.player.id, value);
+  const loaded = [];
+  const transport = createRoomTransport(room, { loadAsset: async (reference, packId) => {
+    loaded.push([reference, packId]);
+    const bytes = Buffer.from("image"); return { bytes, size: bytes.length, contentType: "image/png" };
+  } });
+  t.after(() => transport.close());
+  const image = (kind, id, session = guest.sessionToken) => call(transport, { url: `/api/asset?room=${room.code}&kind=${kind}&id=${id}&session=${session}` });
+  const cover = room.deckOrder.at(-1);
+  command({ type: "draw-public", x: 600, y: 400 });
+  const added = addRoomPack(room, host.player.id, secondPack), exposed = room.decks.get(added).order.at(-1);
+  command({ type: "draw-public", deckId: added, faceUp: true, x: 1000, y: 400 });
+  command({ type: "stack-onto", resourceType: "card", resourceId: exposed, targetType: "deck", targetId: "main" });
+  command({ type: "delete-resource", resourceType: "deck", resourceId: added });
+  assert.equal((await image("card", exposed)).response.statusCode, 200);
+  assert.deepEqual(loaded.at(-1), ["art/front-b.png", "other-art"]);
+  assert.equal((await image("card-back", exposed)).response.statusCode, 200);
+  assert.deepEqual(loaded.at(-1), ["art/back-b.png", "other-art"]);
+  command({ type: "stack-onto", resourceType: "card", resourceId: cover, targetType: "deck", targetId: "main" });
+  assert.equal(projectRoom(room, guest.player.id).decks[0].top.face, null);
+  assert.equal(JSON.stringify(projectRoom(room, guest.player.id)).includes("另一副牌的正面"), false);
+  for (const session of [host.sessionToken, guest.sessionToken]) {
+    assert.equal((await image("card", exposed, session)).response.statusCode, 403);
+    assert.equal((await image("card-back", exposed, session)).response.statusCode, 403);
+    assert.equal((await image("card", cover, session)).response.statusCode, 403);
+  }
+  assert.equal((await image("card-back", cover)).response.statusCode, 200);
+  assert.deepEqual(loaded.at(-1), ["art/back-a.png", firstPack.id]);
+});
 
 test("duplicate commands, including concurrent pack loads and restart retries, mutate only once", async () => {
   let room = createRoom({ code: "ONE-123", pack, hostSecret: "receipt-host-secret" });

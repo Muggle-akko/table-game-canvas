@@ -179,7 +179,7 @@ test("offline demo tidies and collects public cards without exposing private han
   });
   assert.equal(host.cards.filter((card) => card.zone === "public").length, 0);
   assert.equal(host.cards.filter((card) => card.zone === "hand").length, privateHandCount);
-  assert.ok([...knownPublicIds].every((cardId) => !model.cards.some((card) => card.id === cardId)));
+  assert.ok([...knownPublicIds].every((cardId) => model.cards.some((card) => card.id === cardId && card.zone === "deck")));
   assert.equal(engine.project(model, "player_b", 5_000_300).cards.find((card) => card.ownerId === "player_a").face, null);
 
   host = engine.applyCommand(model, "player_a", { type: "undo" }, { now: 5_000_400 });
@@ -208,7 +208,8 @@ test("offline demo recognizes, shuffles, draws, and spreads an overlapping stack
     cardId: overlapping.at(-1).id
   }, { random: () => 0.25, now: 6_000_300 });
   const stack = state.cards.filter((card) => card.zone === "public");
-  assert.ok(stack.every((card) => card.face === null && !oldIds.has(card.id)));
+  assert.ok(stack.every((card) => !oldIds.has(card.id)));
+  assert.equal(stack.filter((card) => card.faceUp).length, overlapping.filter((card) => card.faceUp).length);
 
   state = engine.applyCommand(model, "player_b", { type: "draw-stack", cardId: stack.at(-1).id }, { now: 6_000_400 });
   assert.ok(state.cards.some((card) => card.zone === "hand" && card.ownerId === "player_b" && card.face));

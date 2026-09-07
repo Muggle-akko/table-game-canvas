@@ -24,8 +24,7 @@
     let libraryDrag = null, lastDragAt = 0, spawnNumber = 0, spawning = false, seenMessages = new Set();
     const spawnQueue = [], pendingAssets = new Map();
     let mapBounds = { x: -200, y: -200, width: 2200, height: 1500 };
-    const panels = { world: $("world-panel"), chat: $("chat-panel"), saves: $("saves-panel"), holdem: $("holdem-panel") };
-    const holdemUI = root.ParlorHoldemUI.create(ui);
+    const panels = { world: $("world-panel"), chat: $("chat-panel"), saves: $("saves-panel") };
     const auxBackdrop = button("", "aux-backdrop is-hidden");
     auxBackdrop.setAttribute("aria-label", "关闭面板"); ui.elements.room.append(auxBackdrop);
 
@@ -56,6 +55,7 @@
       const node = el("div", `world-object object-${object.kind}${object.locked ? " is-locked" : ""}${ghost ? " is-ghost" : ""}`);
       node.dataset.objectId = object.id || "";
       node.dataset.kind = object.kind;
+      node.dataset.resourceId = object.resourceId || "";
       node.style.left = `${object.x || 0}px`; node.style.top = `${object.y || 0}px`;
       node.style.width = `${object.width}px`; node.style.height = `${object.height}px`;
       node.style.setProperty("--object-color", object.color);
@@ -89,7 +89,6 @@
       } else if (object.kind === "mat") {
         node.dataset.pattern = object.pattern;
         const heading = el("div", "mat-heading"); heading.append(el("strong", "", object.label));
-        if (object.locked) heading.append(el("span", "", "已锁定"));
         node.append(heading);
         if (object.pattern === "checker") node.append(el("div", "checker-cells"));
         if (object.pattern === "poker") {
@@ -98,7 +97,7 @@
           node.append(slots, el("div", "poker-mat-pot", "底池"));
         }
       }
-      if (object.locked && object.kind !== "mat") node.append(el("span", "object-lock", "锁"));
+      if (!ghost) ui.appendLockIndicator(node, object.locked);
       return node;
     }
 
@@ -381,7 +380,7 @@
     function closePanel({ returnFocus: restoreFocus = true } = {}) {
       hideMinimap();
       Object.values(panels).forEach((panel) => { panel.classList.remove("is-open"); panel.setAttribute("aria-hidden", "true"); });
-      for (const id of ["open-world", "open-chat", "open-saves", "open-holdem"]) $(id).setAttribute("aria-expanded", "false");
+      for (const id of ["open-world", "open-chat", "open-saves"]) $(id).setAttribute("aria-expanded", "false");
       auxBackdrop.classList.add("is-hidden"); openAux = null;
       if (restoreFocus) returnFocus?.focus({ preventScroll: true }); returnFocus = null;
     }
@@ -417,10 +416,6 @@
       }
       const canControl = resource.value.canControl !== false;
       const add = (action, label, iconName, disabled = false) => menu.append(ui.makeSelectionAction(action, iconName, label, { disabled: disabled || (action !== "inspect" && (!ui.app.connectionOpen || !canControl)) }));
-      if (resource.value.managedBy === "holdem" || resource.value.id === ui.app.state.holdem?.matId) {
-        if (resource.type !== "card") return null;
-        add("inspect", "放大看看", "eye"); extra.append(summary, menu); return extra;
-      }
       if (resource.type === "card") add("inspect", "放大看看", "eye");
       if (resource.type !== "token") add("resource-duplicate", "复制", "plus", resource.value.locked || (resource.value.kind === "bag" && resource.value.count > 0));
       add("resource-lock", resource.value.locked ? "解除锁定" : "锁定位置", "hand-grabbing");
@@ -429,7 +424,6 @@
       extra.append(summary, menu); return extra;
     }
     function handleAction(action, resource) {
-      if (action === "open-holdem") { showPanel("holdem"); return true; }
       const ref = { resourceType: resource.type, resourceId: resource.value.id };
       if (action.startsWith("resource-")) {
         const type = { "resource-duplicate": "duplicate-resource", "resource-lock": "lock-resource", "resource-delete": "delete-resource", "resource-save": "save-template" }[action];
@@ -527,7 +521,6 @@
     function render() {
       const state = ui.app.state; if (!state) return;
       renderObjects(); renderLibrary(); renderLocations(); renderHand(); renderChat(); drawMap();
-      holdemUI.render();
       $("chat-input").disabled = !ui.app.connectionOpen;
       $("nickname-save").disabled = !ui.app.connectionOpen;
       if (!initializedRoom) {
@@ -716,7 +709,6 @@
       if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return false;
       if (event.key.toLowerCase() === "b") { ui.toggleLibrary(); return true; }
       if (event.key.toLowerCase() === "c") { showPanel("chat"); return true; }
-      if (event.key.toLowerCase() === "t") { showPanel("holdem"); return true; }
       if (event.key.toLowerCase() === "i") { toggleHand(); return true; }
       if (event.key === " " && !event.target.closest("button, summary, a") && ui.selectedResource()?.type === "card") { event.preventDefault(); inspectCard(ui.selectedResource().value); return true; }
       return false;
