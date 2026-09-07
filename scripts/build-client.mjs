@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 const root = new URL("../", import.meta.url);
 
 export async function buildClient({ check = false } = {}) {
-  const source = await readFile(new URL("src/room-engine.mjs", root), "utf8");
+  const engine = await readFile(new URL("src/room-engine.mjs", root), "utf8");
+  const boards = await readFile(new URL("src/board-resources.mjs", root), "utf8");
+  const source = engine.replace(/^import \{ BOARD_GAME_SETS, BOARD_RESOURCES, BOARD_LAYOUTS \} from "\.\/board-resources.mjs";\n/m, boards + "\n")
+    .replace(/^export \{ BOARD_GAME_SETS, BOARD_RESOURCES, BOARD_LAYOUTS \};\n/m, "");
   const exports = [...source.matchAll(/^export (?:function|class|const) (\w+)/gm)].map((match) => match[1]);
   const body = source.replace(/^import \{ randomInt, randomUUID \} from "node:crypto";\n/, "")
     .replace(/^export /gm, "");

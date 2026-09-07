@@ -1,4 +1,6 @@
 import { randomInt, randomUUID } from "node:crypto";
+import { BOARD_GAME_SETS, BOARD_RESOURCES, BOARD_LAYOUTS } from "./board-resources.mjs";
+export { BOARD_GAME_SETS, BOARD_RESOURCES, BOARD_LAYOUTS };
 
 export const TABLE_GEOMETRY = Object.freeze({
   width: 1800,
@@ -1008,7 +1010,8 @@ export const RESOURCE_CATALOG = Object.freeze([
   { id: "chip-100", kind: "token", label: "黑筹码 · 100", description: "德州、计分，自行发放与移动", symbol: "100", color: "#414946" },
   { id: "chip-500", kind: "token", label: "紫筹码 · 500", description: "德州、计分，自行发放与移动", symbol: "500", color: "#937599" },
   { id: "dealer-button", kind: "token", label: "庄家钮", description: "德州庄家标记，自己传给下一位", symbol: "庄", color: "#eee8d9" },
-  { id: "coin", kind: "token", label: "金币", description: "给冒险添一点奖励", symbol: "P", color: "#d3ac5f" }
+  { id: "coin", kind: "token", label: "金币", description: "给冒险添一点奖励", symbol: "P", color: "#d3ac5f" },
+  ...BOARD_RESOURCES
 ]);
 
 function checkResourceCapacity(room, extraCards = 0, extraObjects = 0, extraDecks = 0) {
@@ -1108,6 +1111,17 @@ function objectDropPoint(command, object) {
     x: clamp(point.x, zone.x + 18, zone.x + zone.width - (object.width || 94) - 18),
     y: clamp(point.y, zone.y + 28, zone.y + zone.height - (object.height || 138) - 28)
   };
+}
+
+function resourceFromPreset(preset, point) {
+  const id = `${preset.kind}_${randomUUID().replaceAll("-", "")}`;
+  const object = { ...structuredClone(preset), id, resourceId: preset.id, ...point, rotation: 0, locked: false };
+  delete object.description;
+  if (preset.kind === "note") object.text = preset.text || "";
+  if (["die", "counter"].includes(preset.kind)) { object.value = preset.kind === "die" ? null : 0; object.rollId = 0; }
+  if (preset.kind === "bag") object.contents = [];
+  if (preset.kind === "token") Object.assign(object, { key: preset.id, homeX: point.x, homeY: point.y });
+  return object;
 }
 
 function applyResourceCommand(room, actor, command) {
@@ -1280,21 +1294,28 @@ function applyResourceCommand(room, actor, command) {
     room.templates.delete(template.id);
     return commit(`移除了收藏「${template.label}」`);
   }
+  if (command.type === "spawn-set") {
+    const set = BOARD_GAME_SETS.find((entry) => entry.id === command.setId);
+    if (!set) throw new RoomError("RESOURCE_NOT_FOUND", "资源库里没有这套棋具。", 404);
+    checkResourceCapacity(room, 0, set.members.length);
+    const origin = objectDropPoint(command, set);
+    const objects = set.members.map(({ resourceId, x, y }) => resourceFromPreset(RESOURCE_CATALOG.find((entry) => entry.id === resourceId), { x: origin.x + x, y: origin.y + y }));
+    saveUndoPoint(room);
+    for (const object of objects) {
+      object.z = room.nextZ++;
+      (object.kind === "token" ? room.tokens : room.objects).set(object.id, object);
+    }
+    return commit(`摆好了「${set.label}」`, { type: "object", id: objects[0].id });
+  }
   if (command.type === "spawn-resource") {
     const preset = RESOURCE_CATALOG.find((entry) => entry.id === command.resourceId);
     if (!preset) throw new RoomError("RESOURCE_NOT_FOUND", "资源库里没有这个物件。", 404);
     checkResourceCapacity(room, 0, 1);
     const point = objectDropPoint(command, preset);
-    const id = `${preset.kind}_${randomUUID().replaceAll("-", "")}`;
-    const object = { ...preset, id, resourceId: preset.id, ...point, rotation: 0, locked: false };
-    delete object.description;
-    if (preset.kind === "note") object.text = preset.text || "";
-    if (["die", "counter"].includes(preset.kind)) { object.value = preset.kind === "die" ? null : 0; object.rollId = 0; }
-    if (preset.kind === "bag") object.contents = [];
+    const object = resourceFromPreset(preset, point), id = object.id;
     saveUndoPoint(room);
     object.z = room.nextZ++;
     if (preset.kind === "token") {
-      Object.assign(object, { key: preset.id, homeX: point.x, homeY: point.y });
       room.tokens.set(id, object);
     } else room.objects.set(id, object);
     return commit(`拿出了「${preset.label}」`, { type: preset.kind === "token" ? "token" : "object", id });
@@ -2012,11 +2033,13 @@ export function validateRoomScene(scene) {
   });
   const tokens = scene.tokens.map((source) => {
     if (!source) fail("标记无效。");
+    const preset = RESOURCE_CATALOG.find((entry) => entry.kind === "token" && entry.id === source.resourceId);
     return {
       id: readId(source.id), key: cleanName(source.key, "token"), label: cleanName(source.label, "标记"),
       symbol: Array.from(String(source.symbol ?? "")).slice(0, 8).join(""), color: color(source.color),
       ...position(source), homeX: finite(source.homeX ?? source.x, -4500, 6300), homeY: finite(source.homeY ?? source.y, -3000, 4100),
       image: image(source.image), packId: typeof source.packId === "string" ? source.packId.slice(0, 40) : undefined,
+      ...(preset ? { resourceId: preset.id, ...(preset.piece ? { piece: structuredClone(preset.piece) } : {}) } : {}),
       ...(source.bagId ? { bagId: String(source.bagId) } : {})
     };
   });
@@ -2419,6 +2442,8 @@ export function projectRoom(room, viewerId) {
       symbol: token.symbol,
       color: token.color,
       hasImage: Boolean(token.image),
+      ...(token.resourceId ? { resourceId: token.resourceId } : {}),
+      ...(token.piece ? { piece: structuredClone(token.piece) } : {}),
       x: token.x,
       y: token.y,
       z: token.z,

@@ -260,7 +260,23 @@ kbd { font: 11px/1.5 var(--body); border: 1px solid currentColor; border-radius:
 .object-mat[data-pattern="checker"] { background: #dfdec3; border-color: #b4bc96; border-radius: 8px; }
 .object-mat[data-pattern="checker"] .mat-heading { color: #3a5740; }
 .checker-cells { position: absolute; inset: 44px 20px 20px; background-color: #e7e6ce; background-image: conic-gradient(#799b7b 25%, transparent 0 50%, #799b7b 0 75%, transparent 0); background-size: 25% 25%; border: 1px solid #3c664646; }
+
+/* Physical boards share the same free-movement surface as cards and markers. */
+.object-mat.is-game-board { border: 0; border-radius: 16px; box-shadow: 0 4px 0 #233c303b, 0 12px 30px #0b281c38; }
+.is-game-board .mat-heading { position: absolute; top: 0; left: 0; right: 0; height: 44px; color: #53654e; font-size: 14px; padding: 0 26px; letter-spacing: 1.5px; }
+.board-art { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; font-family: var(--body); user-select: none; }
+.table-token__face[data-piece-game], .asset-token[data-piece-game] { color: var(--piece-ink); }
+.table-token__face[data-piece-game="chess"]::after, .table-token__face[data-piece-game="jungle"]::after, .table-token__face[data-piece-game="aeroplane"]::after { inset: 5px; opacity: .6; }
+.table-token__face[data-piece-game="xiangqi"] { box-shadow: inset 0 0 0 2px #cfba91, inset 0 -4px 0 #bba17b, 0 4px 0 #b29a76, 0 8px 10px #122c2433; }
+.table-token__face[data-piece-game="xiangqi"]::after { inset: 6px; border: 1.5px solid var(--piece-ink); opacity: .75; }
+.piece-glyph { position: absolute; width: 52px; height: 52px; top: 3px; left: 5px; overflow: visible; pointer-events: none; }
+.piece-hanzi { font-family: var(--body); font-size: 34px; font-weight: 650; line-height: 1; padding-bottom: 3px; }
+[data-piece-game="jungle"] .piece-glyph { width: 40px; height: 40px; left: 11px; top: 1px; }
+[data-piece-game="aeroplane"] .piece-glyph { width: 43px; height: 43px; top: 7px; left: 9px; transform: rotate(-18deg); }
+.piece-animal-name { position: absolute; bottom: 5px; left: 0; right: 0; text-align: center; font-size: 12px; font-weight: 600; line-height: 1; }
+.piece-rank { position: absolute; top: 3px; right: 5px; min-width: 12px; height: 13px; line-height: 13px; font-size: 10px; font-weight: 700; text-align: center; color: var(--piece-stock); background: var(--piece-ink); border-radius: 3px; }
 .object-note[data-resource-id="holdem-guide"] .note-object-text { max-height: 454px; font-size: 14px; line-height: 1.65; }
+.object-note[data-resource-id^="guide-"] .note-object-text { max-height: 560px; font-size: 14px; line-height: 1.65; }
 .just-rolled { animation: dice-roll .4s ease-out; }
 
 /* Ephemeral overlays never intercept another player's gestures. */
@@ -342,6 +358,10 @@ kbd { font: 11px/1.5 var(--body); border: 1px solid currentColor; border-radius:
 .asset-art .object-bag { transform: translate(-50%, -50%) scale(.62) !important; margin-top: 6px; }
 .asset-art .object-mat { transform: translate(-50%, -50%) rotate(-8deg) scale(var(--mat-preview-scale, .135)) !important; border-radius: 12px; }
 .asset-art .object-caption, .asset-art .bag-label, .asset-art .mat-heading { visibility: hidden; }
+.asset-art--set > .board-art { width: 116px; height: 102px; left: 3px; top: 3px; transform: rotate(-8deg); border-radius: 4px; background: #e9e2cd; box-shadow: 2px 4px 6px #203c3326; }
+.asset-art--set .asset-token.asset-set-piece { position: absolute; left: auto; right: 3px; bottom: 10px; top: auto; width: 62px; height: 62px; transform: rotate(8deg) scale(.67); transform-origin: bottom right; }
+.asset-token[data-piece-game] { width: 62px; height: 62px; position: relative; }
+.asset-token[data-piece-game="xiangqi"] { border: 2px solid #bca67a; box-shadow: inset 0 0 0 4px #ead8b2, inset 0 0 0 5px var(--piece-ink), 0 5px 0 #bca67a; }
 .asset-favorite, .asset-remove { position: absolute; top: 5px; right: 5px; display: grid; place-items: center; width: 28px; height: 28px; font-size: 17px; color: #5c6b55; border-radius: 5px; background: #f2f0e7ee; opacity: 0; transition: opacity .12s; }
 .asset-item:hover .asset-favorite, .asset-item:hover .asset-remove, .asset-item:focus-within .asset-favorite, .asset-item:focus-within .asset-remove, .asset-favorite.is-favorite { opacity: 1; }
 .asset-favorite.is-favorite { color: #354d22; }

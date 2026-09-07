@@ -30,7 +30,7 @@ assert.deepEqual(missingIds, [], `app.js queries missing DOM IDs: ${missingIds.j
 
 const localAssets = [...html.matchAll(/\b(?:src|href)="\.\/([^"]+)"/g)].map((match) => match[1]);
 for (const asset of localAssets) await access(resolve(publicDirectory, asset));
-const scriptOrder = ["phosphor-icons.js", "tabletop-engine.js", "builtin-packs.js", "preview-engine.js", "vault.js", "room-recovery.js", "preview-recovery.js", "workspace-ui.js", "room-feedback.js", "app.js"];
+const scriptOrder = ["phosphor-icons.js", "tabletop-engine.js", "builtin-packs.js", "preview-engine.js", "vault.js", "room-recovery.js", "preview-recovery.js", "board-art.js", "workspace-ui.js", "room-feedback.js", "app.js"];
 for (let index = 1; index < scriptOrder.length; index++) {
   assert.ok(html.indexOf(`./${scriptOrder[index - 1]}`) < html.indexOf(`./${scriptOrder[index]}`), `${scriptOrder[index]} must load after its dependencies`);
 }

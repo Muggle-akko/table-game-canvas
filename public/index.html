@@ -17,6 +17,7 @@
     <script defer src="./vault.js"></script>
     <script defer src="./room-recovery.js"></script>
     <script defer src="./preview-recovery.js"></script>
+    <script defer src="./board-art.js"></script>
     <script defer src="./workspace-ui.js"></script>
     <script defer src="./room-feedback.js"></script>
     <script defer src="./app.js"></script>
@@ -311,7 +312,7 @@
         </header>
         <div class="library-panel__body">
           <input id="library-search" type="search" placeholder="搜索资源" aria-label="搜索资源" autocomplete="off" />
-          <nav id="library-tabs" class="library-tabs" aria-label="资源分类"><button type="button" data-category="all" class="is-active" aria-pressed="true">全部</button><button type="button" data-category="packs" aria-pressed="false">牌盒</button><button type="button" data-category="objects" aria-pressed="false">小物</button><button type="button" data-category="boards" aria-pressed="false">棋盘</button><button type="button" data-category="favorites" aria-pressed="false">收藏</button></nav>
+          <nav id="library-tabs" class="library-tabs" aria-label="资源分类"><button type="button" data-category="all" class="is-active" aria-pressed="true">全部</button><button type="button" data-category="sets" aria-pressed="false">套装</button><button type="button" data-category="packs" aria-pressed="false">牌盒</button><button type="button" data-category="objects" aria-pressed="false">小物</button><button type="button" data-category="boards" aria-pressed="false">棋盘</button><button type="button" data-category="favorites" aria-pressed="false">收藏</button></nav>
           <div id="pack-library" class="pack-library"></div>
         </div>
         <footer class="library-footer"><button id="import-pack" type="button"><i data-ph="arrow-up"></i>导入牌盒</button></footer>

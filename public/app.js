@@ -1763,12 +1763,14 @@ function makeTokenNode(token, { ghost = false } = {}) {
   const face = document.createElement("span");
   face.className = "table-token__face";
   if (token.hasImage) appendRoomAssetImage(face, roomAssetUrl("token", token.id), "table-token__image");
+  if (!window.ParlorBoardArt.decorateToken(face, token)) {
   const symbol = document.createElement("span");
   symbol.className = "table-token__symbol";
   symbol.textContent = token.symbol ?? "•";
   symbol.style.fontSize = `${symbol.textContent.length > 5 ? 11 : symbol.textContent.length > 3 ? 14 : symbol.textContent.length > 2 ? 19 : 25}px`;
   symbol.style.color = cardBackVisual({ color: token.color }).contrast;
   face.append(symbol);
+  }
   const label = document.createElement("small");
   label.className = "table-token__label";
   label.textContent = token.label;

@@ -41,6 +41,8 @@
     }
 
     function entries() {
+      const sets = root.ParlorEngine.BOARD_GAME_SETS.map((set) => ({ key: `set:${set.id}`, type: "set", id: set.id, label: set.label,
+        description: set.description, keywords: set.keywords, category: "sets", count: set.members.length, unit: "件", set }));
       const builtin = (ui.app.state?.room.packOptions || root.ParlorPacks.map((pack) => ({ id: pack.id, name: pack.name, cardCount: pack.cards.length })))
         .map((pack) => ({ key: `pack:${pack.id}`, type: "pack", id: pack.id, label: pack.name, description: `${pack.cardCount} 张牌 · 可反复取用`, category: "packs", count: pack.cardCount }));
       const local = importedPacks.map(({ id, pack }) => ({
@@ -50,7 +52,7 @@
       const saved = (ui.app.state?.templates || []).map((template) => ({
         key: template.id, type: "saved", id: template.id, label: template.label, description: `${template.count} ${template.kind === "deck" ? "张" : "件"} · 同桌收藏`, category: "favorites", kind: template.kind, count: template.count, unit: template.kind === "deck" ? "张" : "件", canDelete: template.canDelete
       }));
-      return [...builtin, ...local, ...objects, ...saved];
+      return [...sets, ...builtin, ...local, ...objects, ...saved];
     }
 
     function makeObjectNode(object, { ghost = false } = {}) {
@@ -92,6 +94,8 @@
         node.dataset.pattern = object.pattern;
         const heading = el("div", "mat-heading"); heading.append(el("strong", "", object.label));
         node.append(heading);
+        const board = root.ParlorBoardArt.board(object.pattern);
+        if (board) { node.classList.add("is-game-board"); node.append(board); }
         if (object.pattern === "checker") node.append(el("div", "checker-cells"));
         if (object.pattern === "poker") {
           const slots = el("div", "poker-mat-slots");
@@ -104,8 +108,13 @@
     }
 
     function thumbnail(entry) {
-      const visual = el("div", `asset-art asset-art--${entry.type === "pack" || entry.type === "import" ? "pack" : entry.resource?.kind || entry.kind}`);
-      if (["pack", "import"].includes(entry.type)) {
+      const visual = el("div", `asset-art asset-art--${entry.type === "set" ? "set" : entry.type === "pack" || entry.type === "import" ? "pack" : entry.resource?.kind || entry.kind}`);
+      if (entry.type === "set") {
+        visual.append(root.ParlorBoardArt.board(entry.id));
+        const sampleId = { chess: "chess-w-knight", xiangqi: "xiangqi-r-king", jungle: "jungle-b-lion", aeroplane: "plane-red" }[entry.id];
+        const resource = catalog.find((item) => item.id === sampleId), sample = el("span", "asset-token asset-set-piece");
+        sample.style.setProperty("--token-color", resource.color); root.ParlorBoardArt.decorateToken(sample, resource); visual.append(sample);
+      } else if (["pack", "import"].includes(entry.type)) {
         const pack = entry.pack || root.ParlorPacks.find((pack) => pack.id === entry.id);
         const back = pack?.cardBack || { color: "#355b49", label: entry.label };
         const card = el("div", "asset-card-back"); card.style.setProperty("--asset-color", back.color);
@@ -121,7 +130,9 @@
       } else if (entry.type === "saved") {
         visual.append(icon(entry.kind === "deck" ? "cards-three" : entry.kind === "die" ? "dice-six" : "package"));
       } else if (entry.resource.kind === "token") {
-        const token = el("span", "asset-token", entry.resource.symbol); token.style.setProperty("--token-color", entry.resource.color); visual.append(token);
+        const token = el("span", "asset-token"); token.style.setProperty("--token-color", entry.resource.color);
+        if (!root.ParlorBoardArt.decorateToken(token, entry.resource)) token.textContent = entry.resource.symbol;
+        visual.append(token);
       } else {
         const sample = makeObjectNode({ ...entry.resource, id: "", x: 0, y: 0, value: entry.resource.kind === "die" ? (entry.resource.sides === 6 ? 5 : 20) : 0, count: 0, text: "" }, { ghost: true });
         sample.removeAttribute("role"); sample.removeAttribute("tabindex"); sample.setAttribute("aria-hidden", "true");
@@ -139,7 +150,7 @@
       if (!force && signature === librarySignature) return;
       librarySignature = signature;
       const filtered = all.filter((entry) => (category === "all" || (category === "favorites" ? favorites.has(entry.key) || entry.type === "saved" : entry.category === category))
-        && `${entry.id} ${entry.label} ${entry.description}`.toLowerCase().includes(term));
+        && `${entry.id} ${entry.label} ${entry.description} ${entry.keywords || ""}`.toLowerCase().includes(term));
       const nodes = filtered.map((entry) => {
         const card = el("article", "asset-item"); card.dataset.libraryKey = entry.key;
         const preview = button("", "asset-preview"); preview.setAttribute("aria-label", `添加${entry.label}`); preview.dataset.addAsset = entry.key;
@@ -181,7 +192,7 @@
       const libraryOpen = ui.elements.libraryPanel.classList.contains("is-open") && rect.width >= 760;
       const left = libraryOpen ? Math.max(80, ui.elements.libraryPanel.getBoundingClientRect().right - rect.left + 24) : 80;
       const point = ui.screenToWorld(rect.left + left + (rect.width - left - 150) / 2, rect.top + (rect.height - 60) / 2);
-      const size = entry?.resource || { width: 94, height: 138 };
+      const size = entry?.set || entry?.resource || { width: 94, height: 138 };
       return { x: point.x - (size.width || 94) / 2 + (spawnNumber % 4) * 32, y: point.y - (size.height || 138) / 2 + (Math.floor(spawnNumber / 4) % 3) * 24 };
     }
 
@@ -241,7 +252,8 @@
     async function addAsset(entry, point) {
       if (!entry || !ui.app.state) return false;
       if (!ui.app.connectionOpen) { ui.toast("正在连接牌桌，请稍后再取用。"); return false; }
-      const command = entry.type === "pack" ? { type: "add-pack", packId: entry.id }
+      const command = entry.type === "set" ? { type: "spawn-set", setId: entry.id }
+        : entry.type === "pack" ? { type: "add-pack", packId: entry.id }
         : entry.type === "import" ? { type: "import-pack", pack: entry.pack }
           : entry.type === "saved" ? { type: "spawn-template", templateId: entry.id } : { type: "spawn-resource", resourceId: entry.id };
       const position = point || placement(entry);
