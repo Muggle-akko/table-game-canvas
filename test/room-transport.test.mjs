@@ -84,6 +84,36 @@ function messageBody(roomCode, sessionToken, message) {
   return { roomCode, sessionToken, message };
 }
 
+test("revealing a private hand grants image access in place and concealing revokes it for other seats", async (t) => {
+  const artwork = structuredClone(pack);
+  artwork.cards.forEach((card) => { card.image = "art/private-front.png"; });
+  const room = createRoom({ code: "SHOW-HAND", pack: artwork, hostSecret: "test-only" });
+  const host = joinRoom(room, { hostSecret: room.hostSecret }), owner = joinRoom(room, { displayName: "持有者" });
+  const other = joinRoom(room, { displayName: "同桌" });
+  const transport = createRoomTransport(room, { loadAsset: async () => ({ bytes: Buffer.from("image"), size: 5, contentType: "image/png" }) });
+  t.after(() => transport.close());
+  const command = (player, value) => call(transport, { method: "POST", url: "/api/message", body: messageBody(room.code, player.sessionToken, { type: "command", command: value }) });
+  await command(owner, { type: "draw" });
+  const card = projectRoom(room, owner.player.id).cards[0];
+  const image = (player) => call(transport, { url: `/api/asset?room=${room.code}&kind=card&id=${card.id}&session=${player.sessionToken}` });
+  for (const viewer of [host, other]) assert.equal((await image(viewer)).response.statusCode, 403);
+  assert.equal((await command(host, { type: "flip-card", cardId: card.id })).response.statusCode, 403);
+  await command(owner, { type: "flip-card", cardId: card.id });
+  for (const viewer of [host, other]) {
+    assert.equal(projectRoom(room, viewer.player.id).cards[0].face.label, card.face.label);
+    const response = (await image(viewer)).response;
+    assert.equal(response.statusCode, 200); assert.equal(response.headers["Cache-Control"], "private, no-store");
+  }
+  await command(owner, { type: "flip-card", cardId: card.id });
+  for (const viewer of [host, other]) {
+    assert.equal((await image(viewer)).response.statusCode, 403);
+    assert.equal(projectRoom(room, viewer.player.id).cards[0].face, null);
+  }
+  assert.equal((await image(owner)).response.statusCode, 200);
+  assert.equal(room.cards.get(card.id).ownerId, owner.player.id);
+  assert.equal(room.cards.get(card.id).x, card.x); assert.equal(room.cards.get(card.id).y, card.y);
+});
+
 test("mixed pile artwork follows each card's source and covered faces cannot be fetched", async (t) => {
   const firstPack = structuredClone(pack);
   firstPack.cardBack.image = "art/back-a.png";

@@ -22,6 +22,8 @@
     let librarySignature = "", locationsSignature = "", handSignature = "", chatSignature = "";
     let initializedRoom = false, openAux = null, returnFocus = null, editorId = null, saving = false;
     let libraryDrag = null, lastDragAt = 0, spawnNumber = 0, spawning = false, seenMessages = new Set();
+    let chatPosition = null, chatDrag = null, chatSending = false;
+    const quickChat = $("quick-chat"), chatHandle = $("chat-drag-handle");
     const spawnQueue = [], pendingAssets = new Map();
     let mapBounds = { x: -200, y: -200, width: 2200, height: 1500 };
     const panels = { world: $("world-panel"), chat: $("chat-panel"), saves: $("saves-panel") };
@@ -123,6 +125,7 @@
       } else {
         const sample = makeObjectNode({ ...entry.resource, id: "", x: 0, y: 0, value: entry.resource.kind === "die" ? (entry.resource.sides === 6 ? 5 : 20) : 0, count: 0, text: "" }, { ghost: true });
         sample.removeAttribute("role"); sample.removeAttribute("tabindex"); sample.setAttribute("aria-hidden", "true");
+        if (entry.resource.kind === "mat") sample.style.setProperty("--mat-preview-scale", Math.min(128 / entry.resource.width, 86 / entry.resource.height));
         visual.append(sample);
       }
       return visual;
@@ -320,7 +323,7 @@
       if (activeCardId && !ids.has(activeCardId)) ui.cancelHandInteraction();
       for (const [index, card] of own.entries()) {
         const old = existing.get(card.id);
-        const cardSignature = JSON.stringify([card.face, card.back, card.deckId, card.canControl, card.locked]);
+        const cardSignature = JSON.stringify([card.face, card.back, card.deckId, card.canControl, card.canFlip, card.faceUp, card.locked]);
         const node = old?.dataset.pocketSignature === cardSignature ? old : ui.makeCardNode(card, { x: 0, y: 0, rotation: 0, z: 0 });
         node.dataset.pocketSignature = cardSignature;
         if (old && old !== node) {
@@ -349,7 +352,7 @@
       chatSignature = signature;
       const container = $("chat-messages"), atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 70;
       const unread = messages.filter((message) => !seenMessages.has(message.id) && message.playerId !== ui.app.state.you.id).length;
-      if (openAux !== "chat" && unread) { $("chat-unread").classList.remove("is-hidden"); $("chat-unread").textContent = String(Math.min(99, Number($("chat-unread").textContent || 0) + unread)); }
+      if (openAux !== "chat" && quickChat.classList.contains("is-hidden") && unread) { $("chat-unread").classList.remove("is-hidden"); $("chat-unread").textContent = String(Math.min(99, Number($("chat-unread").textContent || 0) + unread)); }
       messages.forEach((message) => seenMessages.add(message.id));
       const nodes = messages.map((message) => {
         const row = el("article", `chat-message${message.playerId === ui.app.state.you.id ? " is-mine" : ""}`);
@@ -361,7 +364,58 @@
       if (!nodes.length) nodes.push(el("p", "chat-empty", "暂无消息"));
       container.replaceChildren(...nodes);
       if (atBottom || messages.at(-1)?.playerId === ui.app.state.you.id) container.scrollTop = container.scrollHeight;
+      const latest = messages.at(-1), compact = $("quick-chat-message");
+      if (latest) {
+        const name = el("strong", "", latest.playerId === ui.app.state.you.id ? "我" : latest.name);
+        name.style.setProperty("--player-color", latest.color);
+        compact.replaceChildren(name, el("span", "", latest.text));
+        compact.title = `${latest.name}：${latest.text}`;
+      } else { compact.replaceChildren(el("span", "", "和同桌朋友说点什么")); compact.title = ""; }
     }
+
+    function renderChatControls() {
+      for (const prefix of ["chat", "quick-chat"]) {
+        $(prefix + "-input").disabled = !ui.app.connectionOpen;
+        $(prefix + "-form").querySelector("button").disabled = !ui.app.connectionOpen || chatSending || ui.app.pendingCommands.has("chat") || !$(prefix + "-input").value.trim();
+      }
+    }
+
+    function positionChat(position = chatPosition) {
+      if (quickChat.classList.contains("is-hidden")) return;
+      const bounds = ui.elements.viewport.getBoundingClientRect(), size = quickChat.getBoundingClientRect();
+      const visibleHeight = Math.min(bounds.height, (root.visualViewport?.height || root.innerHeight) - bounds.top);
+      const next = position || { x: bounds.width < 760 ? 56 : 88, y: visibleHeight - size.height - 110 };
+      chatPosition = { x: Math.max(8, Math.min(bounds.width - size.width - 8, next.x)), y: Math.max(8, Math.min(visibleHeight - size.height - 8, next.y)) };
+      quickChat.style.left = `${chatPosition.x}px`; quickChat.style.top = `${chatPosition.y}px`;
+    }
+
+    function endChatDrag({ cancel = false } = {}) {
+      const drag = chatDrag; if (!drag) return false;
+      chatDrag = null;
+      if (cancel) positionChat(drag.position);
+      quickChat.classList.remove("is-dragging");
+      try { chatHandle.releasePointerCapture(drag.pointerId); } catch { /* Already released. */ }
+      return true;
+    }
+
+    function hideChat({ returnFocus: restoreFocus = true } = {}) {
+      if (quickChat.classList.contains("is-hidden")) return false;
+      endChatDrag(); quickChat.classList.add("is-hidden");
+      $("open-chat").setAttribute("aria-expanded", String(openAux === "chat"));
+      if (restoreFocus) $("open-chat").focus({ preventScroll: true });
+      return true;
+    }
+
+    function showChat() {
+      ui.app.selectionIntent++;
+      if (openAux === "chat") closePanel({ returnFocus: false });
+      quickChat.classList.remove("is-hidden");
+      $("open-chat").setAttribute("aria-expanded", "true");
+      $("chat-unread").classList.add("is-hidden"); $("chat-unread").textContent = "";
+      positionChat(); renderChatControls(); $("quick-chat-input").focus({ preventScroll: true });
+    }
+
+    const toggleChat = () => { if (!hideChat()) showChat(); };
 
     function hideMinimap({ returnFocus: restoreFocus = false } = {}) {
       const wasOpen = !$("minimap-panel").classList.contains("is-hidden");
@@ -381,11 +435,13 @@
       hideMinimap();
       Object.values(panels).forEach((panel) => { panel.classList.remove("is-open"); panel.setAttribute("aria-hidden", "true"); });
       for (const id of ["open-world", "open-chat", "open-saves"]) $(id).setAttribute("aria-expanded", "false");
+      if (!quickChat.classList.contains("is-hidden")) $("open-chat").setAttribute("aria-expanded", "true");
       auxBackdrop.classList.add("is-hidden"); openAux = null;
       if (restoreFocus) returnFocus?.focus({ preventScroll: true }); returnFocus = null;
     }
     function showPanel(name) {
       ui.app.selectionIntent++;
+      if (name === "chat") hideChat({ returnFocus: false });
       if (name === openAux) { closePanel(); return; }
       closePanel(); ui.hideSidePanels({ returnFocus: false }); returnFocus = document.activeElement;
       openAux = name; panels[name].classList.add("is-open"); panels[name].setAttribute("aria-hidden", "false");
@@ -521,7 +577,7 @@
     function render() {
       const state = ui.app.state; if (!state) return;
       renderObjects(); renderLibrary(); renderLocations(); renderHand(); renderChat(); drawMap();
-      $("chat-input").disabled = !ui.app.connectionOpen;
+      renderChatControls();
       $("nickname-save").disabled = !ui.app.connectionOpen;
       if (!initializedRoom) {
         initializedRoom = true;
@@ -604,7 +660,7 @@
       if (!drag.active) return;
       lastDragAt = Date.now();
       const hit = document.elementFromPoint(event.clientX, event.clientY);
-      if (hit?.closest(".topbar, .side-panel, .library-panel, .aux-panel, .history-panel, .selection-dock, .table-rail, .zoom-controls, .world-overview, .tools-backdrop, .aux-backdrop, .help-sheet, .hand-drawer, #open-hand, dialog")) return;
+      if (hit?.closest(".topbar, .side-panel, .library-panel, .aux-panel, .quick-chat, .history-panel, .selection-dock, .table-rail, .zoom-controls, .world-overview, .tools-backdrop, .aux-backdrop, .help-sheet, .hand-drawer, #open-hand, dialog")) return;
       const rect = ui.elements.viewport.getBoundingClientRect(), libraryRect = ui.elements.libraryPanel.getBoundingClientRect();
       const onLibrary = event.clientX >= libraryRect.left && event.clientX <= libraryRect.right && event.clientY >= libraryRect.top && event.clientY <= libraryRect.bottom;
       if (!onLibrary && event.clientX > rect.left && event.clientX < rect.right && event.clientY > rect.top && event.clientY < rect.bottom) guarded(() => addAsset(entries().find((entry) => entry.key === drag.key), ui.screenToWorld(event.clientX, event.clientY)));
@@ -613,11 +669,12 @@
     for (const type of ["pointercancel", "lostpointercapture"]) window.addEventListener(type, (event) => { if (libraryDrag?.pointerId === event.pointerId) cancelLibraryDrag(); });
     window.addEventListener("blur", cancelLibraryDrag);
     for (const [name, panel] of Object.entries(panels)) {
-      $(name === "saves" ? "open-saves" : `open-${name}`).addEventListener("click", () => showPanel(name));
+      if (name !== "chat") $(name === "saves" ? "open-saves" : `open-${name}`).addEventListener("click", () => showPanel(name));
       panel.querySelector("[data-close-aux]").addEventListener("click", closePanel);
     }
     auxBackdrop.addEventListener("click", closePanel);
     window.addEventListener("resize", () => {
+      endChatDrag(); positionChat();
       if (!openAux) return;
       auxBackdrop.classList.toggle("is-hidden", innerWidth >= 760);
       panels[openAux].setAttribute("aria-modal", String(innerWidth < 760));
@@ -637,7 +694,44 @@
       const offsets = { ArrowLeft: [180, 0], ArrowRight: [-180, 0], ArrowUp: [0, 180], ArrowDown: [0, -180] };
       if (offsets[event.key]) { event.preventDefault(); event.stopPropagation(); ui.app.camera.x += offsets[event.key][0]; ui.app.camera.y += offsets[event.key][1]; ui.applyCamera(); }
     });
-    $("chat-form").addEventListener("submit", (event) => { event.preventDefault(); guarded(async () => { const text = $("chat-input").value.trim(); if (text && await ui.sendCommand({ type: "chat", text })) $("chat-input").value = ""; }); });
+    $("open-chat").addEventListener("click", toggleChat);
+    $("close-quick-chat").addEventListener("click", () => hideChat());
+    $("open-chat-history").addEventListener("click", () => showPanel("chat"));
+    root.visualViewport?.addEventListener("resize", () => positionChat());
+    chatHandle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.isPrimary === false || chatDrag || ui.app.drag || ui.app.pan) return;
+      positionChat();
+      chatDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, position: { ...chatPosition } };
+      chatHandle.setPointerCapture(event.pointerId); quickChat.classList.add("is-dragging");
+      event.preventDefault(); event.stopPropagation();
+    });
+    window.addEventListener("pointermove", (event) => {
+      if (chatDrag?.pointerId !== event.pointerId) return;
+      positionChat({ x: chatDrag.position.x + event.clientX - chatDrag.x, y: chatDrag.position.y + event.clientY - chatDrag.y });
+    });
+    window.addEventListener("pointerup", (event) => { if (chatDrag?.pointerId === event.pointerId) endChatDrag(); });
+    for (const type of ["pointercancel", "lostpointercapture"]) chatHandle.addEventListener(type, () => endChatDrag({ cancel: true }));
+    window.addEventListener("blur", () => endChatDrag({ cancel: true }));
+    chatHandle.addEventListener("keydown", (event) => {
+      const step = event.shiftKey ? 24 : 8, delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
+      if (delta) { event.preventDefault(); event.stopPropagation(); positionChat({ x: chatPosition.x + delta[0], y: chatPosition.y + delta[1] }); }
+    });
+    for (const prefix of ["chat", "quick-chat"]) {
+      const input = $(prefix + "-input"), other = $(prefix === "chat" ? "quick-chat-input" : "chat-input");
+      input.addEventListener("input", () => { other.value = input.value; renderChatControls(); });
+      input.addEventListener("keydown", (event) => { if (event.key === "Enter" && event.isComposing) event.preventDefault(); });
+      $(prefix + "-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const text = input.value.trim();
+        if (!text || chatSending || !ui.app.connectionOpen) return;
+        chatSending = true; renderChatControls();
+        guarded(async () => {
+          try {
+            if (await ui.sendCommand({ type: "chat", text })) for (const node of [input, other]) if (node.value.trim() === text) node.value = "";
+          } finally { chatSending = false; renderChatControls(); }
+        });
+      });
+    }
     $("resource-edit-form").addEventListener("submit", (event) => { event.preventDefault(); guarded(async () => { if (await ui.sendCommand({ type: "edit-resource", resourceType: "object", resourceId: editorId, label: $("resource-label").value, text: $("resource-text").value })) $("resource-editor").close(); }); });
     for (const node of document.querySelectorAll("[data-close-dialog]")) node.addEventListener("click", () => node.closest("dialog").close());
     $("welcome-host-help").addEventListener("click", () => $("host-guide").showModal());
@@ -694,8 +788,10 @@
     function keydown(event) {
       if (document.querySelector("dialog[open]")) return false;
       if (event.key === "Escape") {
+        if (endChatDrag({ cancel: true })) return true;
         if (hideMinimap({ returnFocus: true })) return true;
         if (openAux) { closePanel(); return true; }
+        if (hideChat()) return true;
         if (!$("hand-drawer").classList.contains("is-hidden")) { toggleHand(); return true; }
       }
       if (event.key === "Tab" && openAux && innerWidth < 760) {
@@ -708,13 +804,13 @@
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") { event.preventDefault(); const resource = ui.selectedResource(); if (resource) handleAction("resource-duplicate", resource); return true; }
       if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return false;
       if (event.key.toLowerCase() === "b") { ui.toggleLibrary(); return true; }
-      if (event.key.toLowerCase() === "c") { showPanel("chat"); return true; }
+      if (event.key.toLowerCase() === "c") { toggleChat(); return true; }
       if (event.key.toLowerCase() === "i") { toggleHand(); return true; }
       if (event.key === " " && !event.target.closest("button, summary, a") && ui.selectedResource()?.type === "card") { event.preventDefault(); inspectCard(ui.selectedResource().value); return true; }
       return false;
     }
     renderWelcome();
-    return { render, renderLibrary, renderObjects, renderSaveStatus, drawMap, makeObjectNode, extraActions, handleAction, editObject, keydown, closePanel, showPanel, hideMinimap, cancelLibraryDrag, kindNames };
+    return { render, renderLibrary, renderObjects, renderSaveStatus, renderChatControls, drawMap, makeObjectNode, extraActions, handleAction, editObject, keydown, closePanel, showPanel, showChat, hideMinimap, cancelLibraryDrag, kindNames };
   }
   root.ParlorWorkspace = Object.freeze({ create });
 })(globalThis);

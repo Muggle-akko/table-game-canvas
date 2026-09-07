@@ -74,6 +74,8 @@ const elements = {
   turnPlayerSelect: $("#turn-player-select"),
   randomTurn: $("#random-turn"),
   nextTurn: $("#next-turn"),
+  passTurn: $("#pass-turn"),
+  turnIndicator: $("#turn-indicator"),
   undoTable: $("#undo-table"),
   drawCard: $("#draw-card"),
   dealCount: $("#deal-count"),
@@ -148,6 +150,8 @@ const app = {
   pan: null,
   drag: null,
   dragHeartbeat: null,
+  pendingDrops: new Map(),
+  dropHeartbeat: null,
   tableTouches: new Map(),
   touchNavigation: null,
   handTouch: null,
@@ -160,6 +164,8 @@ const app = {
   lastTablePoint: null,
   remoteCursors: new Map(),
   remoteDrags: new Map(),
+  remoteDrops: new Map(),
+  endedRemoteDrags: new Map(),
   lastCursorSentAt: Number.NEGATIVE_INFINITY,
   queuedCursorMessage: null,
   cursorSendTimer: null,
@@ -184,6 +190,8 @@ let recovery;
 let previewRecovery;
 let stackState = null;
 let stackIndex = new Map();
+let tokenStackState = null;
+let tokenStackIndex = new Map();
 
 const CURSOR_SEND_INTERVAL = 100;
 const CURSOR_REQUEST_TIMEOUT = 1800;
@@ -779,19 +787,23 @@ function receiveRoomEvent(message, { initial = app.awaitingInitialState } = {}) 
 
   if (message.type === "cursor") {
     app.remoteCursors.set(message.playerId, { ...message, seenAt: Date.now() });
-    if (message.drag) {
-      app.remoteDrags.set(message.playerId, {
-        ...message.drag,
-        ...(message.drag.sourceType === "stack" ? { cardIds: visibleStackForCard(message.drag.resourceId).map((card) => card.id) } : {}),
-        playerId: message.playerId,
-        name: message.name,
-        color: message.color,
-        seenAt: Date.now()
-      });
-    } else {
+    const key = `${message.playerId}:${message.drag?.dragId}`;
+    if (message.drag && !app.endedRemoteDrags.has(key) && !app.remoteDrops.has(key)) {
+      app.remoteDrags.set(message.playerId, remoteDragPreview(message));
+    } else if (!message.drag) {
       app.remoteDrags.delete(message.playerId);
     }
     renderCursors();
+    renderRemoteDrags();
+    return;
+  }
+
+  if (message.type === "drag-drop") {
+    const key = `${message.playerId}:${message.drag?.dragId}`;
+    if (!message.drag || app.endedRemoteDrags.has(key)) return;
+    if (app.remoteDrags.get(message.playerId)?.dragId === message.drag.dragId) app.remoteDrags.delete(message.playerId);
+    const previous = app.remoteDrops.get(key);
+    app.remoteDrops.set(key, { ...remoteDragPreview(message), ...(previous ? { cardIds: previous.cardIds, tokenIds: previous.tokenIds } : {}), released: true });
     renderRemoteDrags();
     return;
   }
@@ -810,7 +822,19 @@ function receiveRoomEvent(message, { initial = app.awaitingInitialState } = {}) 
   }
 
   if (message.type === "drag-end") {
-    if (!message.dragId || app.remoteDrags.get(message.playerId)?.dragId === message.dragId) app.remoteDrags.delete(message.playerId);
+    if (message.dragId) {
+      const key = `${message.playerId}:${message.dragId}`;
+      const revision = message.revision ?? app.endedRemoteDrags.get(key)?.revision;
+      app.endedRemoteDrags.set(key, { revision, seenAt: Date.now() });
+      if (message.playerId === app.state?.you.id) {
+        const drop = app.pendingDrops.get(message.dragId);
+        if (drop) { drop.confirmedRevision = revision; drop.confirmed = true; }
+        renderPendingDrops();
+      }
+    } else {
+      app.remoteDrags.delete(message.playerId);
+      for (const [key, drop] of app.remoteDrops) if (drop.playerId === message.playerId) app.remoteDrops.delete(key);
+    }
     renderRemoteDrags();
     return;
   }
@@ -1055,6 +1079,20 @@ function visibleStackForCard(cardId) {
   return stackIndex.get(cardId) || [];
 }
 
+function visibleTokenStack(tokenId) {
+  if (!app.state) return [];
+  if (tokenStackState !== app.state) {
+    tokenStackState = app.state;
+    tokenStackIndex = new Map();
+    for (const token of app.state.tokens || []) {
+      if (tokenStackIndex.has(token.id)) continue;
+      const stack = window.ParlorEngine.tokenStackMembers(app.state.tokens, token.id);
+      for (const member of stack) tokenStackIndex.set(member.id, stack);
+    }
+  }
+  return tokenStackIndex.get(tokenId) || [];
+}
+
 function activeDeck() {
   const selectedId = app.selection?.type === "deck" ? app.selection.id : null;
   return app.state?.decks?.find((deck) => deck.id === selectedId)
@@ -1174,7 +1212,7 @@ function renderSelectionTransfer(resource, preserveRecipient = false) {
   elements.selectionPlayer.replaceChildren(...options);
   elements.selectionPlayer.value = options.find((option) => option.value === recipient)?.value || options[0]?.value || "";
   elements.selectionTransfer.classList.toggle("is-hidden", !app.selectionTransferOpen || options.length === 0);
-  elements.selectionSend.disabled = !app.connectionOpen || options.length === 0;
+  elements.selectionSend.disabled = !app.connectionOpen || resourceDropPending(resource.type, resource.value.id) || options.length === 0;
 }
 
 function renderSelectionDock() {
@@ -1193,7 +1231,7 @@ function renderSelectionDock() {
   const wasOpen = sameSelection && elements.selectionActions.querySelector(".selection-more")?.hasAttribute("open");
   const focused = sameSelection && elements.selectionActions.contains(document.activeElement) ? document.activeElement : null;
   const focusedAction = focused?.dataset.selectionAction;
-  const connected = app.connectionOpen;
+  const connected = app.connectionOpen && !resourceDropPending(resource.type, resource.value.id);
   const actions = [], secondaryActions = [];
   let allowTransfer = false;
   elements.selectionDock.classList.remove("is-hidden");
@@ -1210,8 +1248,13 @@ function renderSelectionDock() {
     secondaryActions.push(makeSelectionAction("collect-deck", "stack", "收回散牌", { disabled: !connected || !resource.value.publicCount }));
     allowTransfer = app.state.players.length > 1 && resource.value.canDraw;
   } else if (resource.type === "token") {
-    elements.selectionMeta.textContent = resource.value.locked ? "已锁定" : "";
-    elements.selectionTitle.textContent = resource.value.label;
+    const stack = visibleTokenStack(resource.value.id), locked = stack.some((token) => token.locked);
+    elements.selectionMeta.textContent = stack.length > 1 ? `${stack.length} 枚${locked ? " · 含锁定" : ""}` : resource.value.locked ? "已锁定" : "";
+    elements.selectionTitle.textContent = stack.length > 1 ? "筹码堆" : resource.value.label;
+    if (stack.length > 1) {
+      actions.push(makeSelectionAction("token-take", "hand-grabbing", "取出一枚", { accent: true, disabled: !connected || locked }));
+      actions.push(makeSelectionAction("token-spread", "arrows-out-line-horizontal", "展开", { disabled: !connected || locked }));
+    }
     actions.push(makeSelectionAction("resource-duplicate", "plus", "再拿一个", { accent: true, disabled: !connected || resource.value.locked }));
     secondaryActions.push(makeSelectionAction("token-front", "arrow-up", "提到上层", { disabled: !connected || resource.value.locked }));
   } else if (resource.type === "object") {
@@ -1239,14 +1282,15 @@ function renderSelectionDock() {
       secondaryActions.push(makeSelectionAction("spread-stack-column", "arrows-out-line-horizontal", "纵向展开", { disabled: !canEdit || stackLocked }));
       secondaryActions.push(makeSelectionAction("spread-stack-grid", "corners-out", "网格展开", { disabled: !canEdit || stackLocked }));
     } else if (card.zone === "hand" && card.ownerId !== app.state.you.id) {
-      elements.selectionMeta.textContent = "朋友的私人区";
-      elements.selectionTitle.textContent = "背面朝上的牌";
+      elements.selectionMeta.textContent = card.faceUp ? "朋友的手牌 · 已展示" : "朋友的私人区";
+      elements.selectionTitle.textContent = card.face?.label || "背面朝上的牌";
       actions.push(makeSelectionAction("signal-card", "cursor-click", "标记这张", { accent: true, disabled: !connected }));
     } else if (card.zone === "hand") {
-      elements.selectionMeta.textContent = card.ownerId === app.state.you.id ? "手牌" : "私有";
+      elements.selectionMeta.textContent = card.faceUp ? "已展示给大家" : "仅自己可见";
       elements.selectionTitle.textContent = card.face?.label || "背面朝上的牌";
-      actions.push(makeSelectionAction("reveal-card", "eye", "正面公开", { accent: true, disabled: !canEdit }));
-      actions.push(makeSelectionAction("cover-card", "eye-slash", "背面盖放", { disabled: !canEdit }));
+      actions.push(makeSelectionAction("flip-card", card.faceUp ? "eye-slash" : "eye", card.faceUp ? "收回展示" : "展示手牌", { accent: true, disabled: !connected || !canFlipCard(card) }));
+      secondaryActions.push(makeSelectionAction("reveal-card", "eye", "正面放到桌上", { disabled: !canEdit }));
+      secondaryActions.push(makeSelectionAction("cover-card", "eye-slash", "背面放到桌上", { disabled: !canEdit }));
       secondaryActions.push(makeSelectionAction("rotate-left", "arrow-counter-clockwise", "左转", { disabled: !canEdit }));
       secondaryActions.push(makeSelectionAction("rotate-right", "arrow-clockwise", "右转", { disabled: !canEdit }));
       secondaryActions.push(makeSelectionAction("arrange-hand", "stack", "整理私人区", { disabled: !connected }));
@@ -1272,6 +1316,7 @@ function renderSelectionDock() {
   const more = workspace.extraActions(resource, secondaryActions);
   if (more) { if (wasOpen) more.setAttribute("open", ""); actions.push(more); }
   elements.selectionActions.replaceChildren(...actions);
+  if (resourceDropPending(resource.type, resource.value.id)) for (const button of elements.selectionActions.querySelectorAll("button")) button.disabled = true;
   elements.selectionDock.dataset.resourceKey = resourceKey;
   renderSelectionTransfer(resource, sameSelection);
   if (focusedAction) {
@@ -1283,7 +1328,7 @@ function renderSelectionDock() {
 
 function runSelectionAction(action) {
   const resource = selectedResource();
-  if (!resource || !app.state) return;
+  if (!resource || !app.state || resourceDropPending(resource.type, resource.value.id)) return;
   if (action === "signal-card") { void feedback.requestCard(resource.value); return; }
   if (action === "arrange-hand") { void sendCommand({ type: "arrange-hand" }); return; }
   elements.selectionActions.querySelector(".selection-more")?.removeAttribute("open");
@@ -1305,7 +1350,14 @@ function runSelectionAction(action) {
   }
   if (resource.type === "token") {
     const geometry = app.state.room.geometry;
-    if (action === "token-center") {
+    if (action === "token-take") {
+      const intent = app.selectionIntent;
+      void sendCommand({ type: "take-token", tokenId: resource.value.id }, { withReceipt: true }).then((receipt) => {
+        if (receipt?.createdResource && app.selectionIntent === intent) selectResource("token", receipt.createdResource.id, { preserveIntent: true });
+      });
+    } else if (action === "token-spread") {
+      void sendCommand({ type: "spread-token-stack", tokenId: resource.value.id });
+    } else if (action === "token-center") {
       sendCommand({
         type: "move-token",
         tokenId: resource.value.id,
@@ -1503,6 +1555,10 @@ function appendCardFace(container, face, cardId) {
   container.append(front);
 }
 
+function canFlipCard(card) {
+  return card.canFlip ?? (card.zone === "public" ? card.canControl : card.zone === "hand" && card.ownerId === app.state?.you.id);
+}
+
 function makeCardNode(card, position, { ghost = false } = {}) {
   const node = document.createElement("div");
   node.className = `playing-card${card.canControl ? " can-control" : ""}${card.locked ? " is-locked" : ""}${ghost ? " drag-card" : ""}`;
@@ -1512,28 +1568,36 @@ function makeCardNode(card, position, { ghost = false } = {}) {
   node.style.zIndex = String(20 + (position.z || 0));
   node.style.transform = `rotate(${position.rotation || 0}deg)`;
   if (!ghost && card.id) node.tabIndex = 0;
-  node.setAttribute("role", !ghost && card.zone === "public" && card.canControl ? "group" : "img");
+  node.setAttribute("role", !ghost && canFlipCard(card) ? "group" : "img");
   node.setAttribute(
     "aria-label",
     card.face ? card.face.label : card.zone === "public" ? "背面朝上的公共牌" : "背面朝上的私有牌"
   );
-  const interactionHint = card.canControl
-    ? card.zone === "public" ? " · 拖动位置，双击翻面" : " · 拖动改变区域"
-    : "";
+  const interactionHint = card.zone === "hand" && card.ownerId !== app.state?.you.id ? " · 点选向持有者请求"
+    : card.canControl ? card.zone === "public" ? " · 拖动位置，双击翻面" : " · 拖动位置，双击切换展示" : "";
   node.title = card.face
     ? `${card.face.label}${interactionHint}`
     : `${cardBackVisual(card.back).label} 牌背${interactionHint}`;
   if (card.face) appendCardFace(node, card.face, card.id);
   else appendCardBack(node, card.back, card.deckId, card.id);
+  if (card.zone === "hand" && card.faceUp) {
+    const visibility = document.createElement("span");
+    visibility.className = "card-visibility";
+    visibility.textContent = "已展示";
+    visibility.title = "同桌玩家可见这张手牌的正面";
+    node.append(visibility);
+    node.title += " · 已展示给大家";
+  }
   if (!ghost) appendLockIndicator(node, card.locked);
-  if (!ghost && card.zone === "public" && card.canControl) {
+  if (!ghost && canFlipCard(card)) {
     const flip = document.createElement("button");
     flip.className = "card-flip-button";
     flip.type = "button";
     flip.dataset.cardAction = "flip";
-    flip.setAttribute("aria-label", card.faceUp === false ? "翻到正面" : "翻到背面");
-    flip.title = card.faceUp === false ? "翻到正面" : "翻到背面";
-    flip.append(phIcon("arrows-counter-clockwise"));
+    const label = card.zone === "hand" ? card.faceUp ? "收回展示" : "展示手牌" : card.faceUp === false ? "翻到正面" : "翻到背面";
+    flip.setAttribute("aria-label", label);
+    flip.title = label;
+    flip.append(phIcon(card.zone === "hand" ? card.faceUp ? "eye-slash" : "eye" : "arrows-counter-clockwise"));
     node.append(flip);
   }
   return node;
@@ -1570,6 +1634,24 @@ function makeStackDragNode(cards, anchor) {
     );
     node.style.setProperty("--stack-order", String(index + 1));
     if (index === cards.length - 1) appendStackCount(node, cards.length);
+    ghost.append(node);
+  });
+  return ghost;
+}
+
+function appendTokenStackCount(node, count) {
+  const badge = document.createElement("span");
+  badge.className = "token-stack-count";
+  badge.textContent = String(count);
+  node.append(badge);
+}
+
+function makeTokenStackDragNode(tokens, anchor) {
+  const ghost = document.createElement("div");
+  ghost.className = "drag-token-stack";
+  tokens.forEach((token, index) => {
+    const node = makeTokenNode({ ...token, x: token.x - anchor.x, y: token.y - anchor.y, z: index, canControl: false }, { ghost: true });
+    if (index === tokens.length - 1) appendTokenStackCount(node, tokens.length);
     ghost.append(node);
   });
   return ghost;
@@ -1693,7 +1775,7 @@ function renderCards() {
       position = handCardPosition(card.ownerId, index, group.length);
     }
     app.cardPositions.set(card.id, position);
-    const signature = JSON.stringify([card.face, card.back, card.deckId, card.canControl, card.locked, card.zone]);
+    const signature = JSON.stringify([card.face, card.back, card.deckId, card.canControl, card.canFlip, card.locked, card.zone, card.faceUp]);
     const old = existing.get(card.id);
     const node = old?.dataset.signature === signature ? old : makeCardNode(card, position);
     node.dataset.signature = signature;
@@ -1701,7 +1783,7 @@ function renderCards() {
     node.style.transform = `rotate(${position.rotation || 0}deg)`; node.style.zIndex = String(20 + (position.z || 0));
     node.classList.remove("is-stack-top");
     node.querySelector(".card-stack-count")?.remove();
-    node.setAttribute("aria-label", `${card.face?.label || "背面朝上的牌"}${card.locked ? "，已锁定" : ""}`);
+    node.setAttribute("aria-label", `${card.face?.label || "背面朝上的牌"}${card.zone === "hand" && card.faceUp ? "，已展示" : ""}${card.locked ? "，已锁定" : ""}`);
     if (card.zone === "public") {
       const stack = visibleStackForCard(card.id);
       if (stack.length >= 2) node.title = `${stack.length} 张牌堆 · 拖动整组，轻点操作`;
@@ -1711,7 +1793,7 @@ function renderCards() {
         appendStackCount(node, stack.length);
       }
     }
-    const visibleSide = card.face ? "front" : "back";
+    const visibleSide = card.zone === "hand" && card.ownerId === app.state.you.id ? `hand:${card.faceUp ? "shown" : "hidden"}` : card.face ? "front" : "back";
     const previousSide = app.cardFaceStates.get(card.id);
     if (previousSide && previousSide !== visibleSide) node.classList.add("is-flipping");
     nextFaceStates.set(card.id, visibleSide);
@@ -1729,9 +1811,19 @@ function renderTokens() {
   const ids = new Set();
   for (const token of app.state.tokens || []) {
     ids.add(token.id);
-    const signature = JSON.stringify(token), old = existing.get(token.id);
+    const stack = visibleTokenStack(token.id), top = stack.at(-1)?.id === token.id;
+    const signature = JSON.stringify([token, stack.length, top]), old = existing.get(token.id);
     if (old?.dataset.signature === signature) continue;
     const node = makeTokenNode(token); node.dataset.signature = signature;
+    if (stack.length > 1) {
+      node.classList.add("is-token-stack");
+      node.title = `${stack.length} 枚筹码 · 拖动整叠，点选取出或展开`;
+      if (top) {
+        node.classList.add("is-stack-top");
+        node.setAttribute("aria-label", `筹码堆，${stack.length} 枚${stack.some((member) => member.locked) ? "，含锁定的筹码" : ""}`);
+        appendTokenStackCount(node, stack.length);
+      }
+    }
     if (old) { const focused = old.contains(document.activeElement); old.replaceWith(node); if (focused) node.focus({ preventScroll: true }); }
     else elements.tokenRoot.append(node);
   }
@@ -1796,6 +1888,10 @@ function renderTurn() {
   elements.turnPlayerName.textContent = activePlayer ? activePlayer.name : "尚未指定行动玩家";
   elements.turnBanner.style.setProperty("--turn-color", color);
   elements.turnBanner.classList.toggle("is-hidden", !activePlayer);
+  elements.turnIndicator.classList.toggle("is-hidden", !activePlayer);
+  document.body.classList.toggle("has-turn", Boolean(activePlayer));
+  elements.passTurn.classList.toggle("is-hidden", !activePlayer || (app.state.you.role !== "host" && activePlayer.id !== app.state.you.id));
+  elements.passTurn.querySelector("span").textContent = activePlayer?.id === app.state.you.id ? "结束回合" : "下一位";
   elements.turnBanner.disabled = !activePlayer;
   elements.turnBanner.dataset.playerId = activePlayer?.id || "";
   elements.turnBannerName.textContent = activePlayer ? activePlayer.name : "等待房主指定";
@@ -1862,6 +1958,7 @@ function renderTools() {
   if (!app.state) return;
   const connected = app.connectionOpen;
   const isHost = app.state.you.role === "host";
+  const canPassTurn = isHost || app.state.turn?.activePlayerId === app.state.you.id;
   const counter = app.state.counter || { value: 1, min: 1, max: 99 };
   const offlineGuests = app.state.players.filter((player) => player.role === "guest" && !player.online);
   const pending = (type) => app.pendingCommands.has(type);
@@ -1870,9 +1967,11 @@ function renderTools() {
   elements.rollDie.disabled = !connected || pending("roll-die");
   elements.decrementCounter.disabled = !connected || pending("adjust-counter") || counter.value <= counter.min;
   elements.incrementCounter.disabled = !connected || pending("adjust-counter") || counter.value >= counter.max;
-  elements.turnPlayerSelect.disabled = !connected || !isHost || pending("set-turn");
+  elements.turnPlayerSelect.disabled = !connected || !canPassTurn || pending("set-turn");
   elements.randomTurn.disabled = !connected || !isHost || pending("random-turn");
-  elements.nextTurn.disabled = !connected || !isHost || pending("advance-turn");
+  elements.nextTurn.disabled = !connected || !canPassTurn || pending("advance-turn");
+  elements.passTurn.disabled = elements.nextTurn.disabled;
+  elements.nextTurn.textContent = app.state.turn?.activePlayerId === app.state.you.id ? "结束回合" : "下一位";
   elements.undoTable.disabled = !connected || !isHost || !app.state.canUndo || pending("undo");
   elements.drawCard.disabled = !connected || !deck.canDraw || pending("draw");
   elements.dealCount.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each");
@@ -1906,10 +2005,18 @@ function renderTools() {
   renderPackLibrary();
   renderSelectionDock();
   workspace?.renderSaveStatus();
+  workspace?.renderChatControls();
 }
 
 function renderRoom() {
   if (!app.state) return;
+  const visualRoomKey = `${app.state.room.gameId}:${app.state.room.epoch}:${app.state.you.id}`;
+  if (app.visualRoomKey && app.visualRoomKey !== visualRoomKey) {
+    cancelDrag(); app.remoteDrags.clear(); app.remoteDrops.clear(); app.endedRemoteDrags.clear();
+  }
+  app.visualRoomKey = visualRoomKey;
+  const home = app.state.room.geometry.homeZone;
+  Object.assign(elements.publicZone.style, { left: `${home.x}px`, top: `${home.y}px`, width: `${home.width}px`, height: `${home.height}px` });
   elements.roomTitle.textContent = app.state.room.title;
   updateIdentity(app.state.you);
   renderPlayers();
@@ -1920,6 +2027,7 @@ function renderRoom() {
   renderCards();
   workspace?.render();
   if (app.drag?.activated) setDragSourceClasses(app.drag, true);
+  renderPendingDrops();
   renderDie();
   renderCounter();
   renderTurn();
@@ -1984,10 +2092,11 @@ function fitCamera() {
   const rect = elements.viewport.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
   const geometry = app.state?.room.geometry || { width: 1800, height: 1100 };
+  const home = geometry.homeZone || { x: 205, y: 205, width: 1390, height: 565 };
   const privateZone = app.handLayouts.get(app.state?.you.id);
-  const minX = Math.min(0, (privateZone?.x ?? 0) - 30), minY = Math.min(0, (privateZone?.y ?? 0) - 30);
-  const width = Math.max(geometry.width, privateZone ? privateZone.x + privateZone.width + 30 : 0) - minX;
-  const height = Math.max(geometry.height, privateZone ? privateZone.y + privateZone.height + 30 : 0) - minY;
+  const minX = Math.min(home.x - 30, (privateZone?.x ?? 0) - 30), minY = Math.min(home.y - 30, (privateZone?.y ?? 0) - 30);
+  const width = Math.max(geometry.width, home.x + home.width + 30, privateZone ? privateZone.x + privateZone.width + 30 : 0) - minX;
+  const height = Math.max(geometry.height, home.y + home.height + 30, privateZone ? privateZone.y + privateZone.height + 30 : 0) - minY;
   const left = cameraLeftInset(rect);
   const scale = Math.max(rect.width < 600 ? 0.42 : 0.25, Math.min(0.84, (rect.width - left - 56) / width, (rect.height - 100) / height));
   app.camera = {
@@ -2008,10 +2117,11 @@ function fitAll() {
     ...(app.state.tokens || []).map((item) => ({ ...item, width: 62, height: 62 })),
     ...(app.state.objects || []), ...app.handLayouts.values()
   ];
-  const minX = Math.min(205, ...items.map((item) => item.x)) - 80;
-  const minY = Math.min(205, ...items.map((item) => item.y)) - 80;
-  const maxX = Math.max(1595, ...items.map((item) => item.x + item.width)) + 80;
-  const maxY = Math.max(1050, ...items.map((item) => item.y + item.height)) + 80;
+  const home = app.state.room.geometry.homeZone;
+  const minX = Math.min(home.x, ...items.map((item) => item.x)) - 80;
+  const minY = Math.min(home.y, ...items.map((item) => item.y)) - 80;
+  const maxX = Math.max(home.x + home.width, ...items.map((item) => item.x + item.width)) + 80;
+  const maxY = Math.max(home.y + home.height, ...items.map((item) => item.y + item.height)) + 80;
   const rect = elements.viewport.getBoundingClientRect();
   const left = cameraLeftInset(rect);
   const width = rect.width - left - 36, height = rect.height - 100;
@@ -2072,11 +2182,10 @@ function showPing(ping) {
   node.style.top = `${Number(ping.y)}px`;
   node.style.setProperty("--ping-color", ping.color || "#e9b94d");
   node.setAttribute("aria-label", `${ping.name || "玩家"} 标记了这里`);
-  const rings = document.createElement("span");
-  rings.className = "table-ping__rings";
   const label = document.createElement("strong");
+  label.className = "table-ping__label";
   label.textContent = `${ping.name || "玩家"} · 看这里`;
-  node.append(rings, label);
+  node.append(label);
   while (elements.pingRoot.children.length >= 8) elements.pingRoot.firstElementChild?.remove();
   elements.pingRoot.append(node);
   window.setTimeout(() => node.remove(), 1900);
@@ -2302,9 +2411,18 @@ function renderCursors() {
   }
 }
 
+function remoteDragPreview(message) {
+  return {
+    ...message.drag,
+    ...(message.drag.sourceType === "stack" ? { cardIds: visibleStackForCard(message.drag.resourceId).map((card) => card.id) } : {}),
+    ...(message.drag.sourceType === "token-stack" ? { tokenIds: visibleTokenStack(message.drag.resourceId).map((token) => token.id) } : {}),
+    playerId: message.playerId, name: message.name, color: message.color, seenAt: Date.now()
+  };
+}
+
 function makeRemoteDragNode(preview) {
   const wrapper = document.createElement("div");
-  wrapper.className = "remote-drag";
+  wrapper.className = `remote-drag${preview.released ? " is-settling" : ""}`;
   wrapper.dataset.sourceType = preview.sourceType;
   wrapper.style.transform = `translate(${preview.x}px, ${preview.y}px)`;
   wrapper.style.setProperty("--drag-player-color", preview.color || "#e9b94d");
@@ -2324,6 +2442,11 @@ function makeRemoteDragNode(preview) {
       { x: 0, y: 0, rotation: preview.rotation || 0, z: 0 },
       { ghost: true }
     );
+  } else if (preview.sourceType === "token-stack") {
+    const tokens = (preview.tokenIds || []).map((id) => app.state.tokens.find((token) => token.id === id));
+    const anchor = tokens.find((token) => token?.id === preview.resourceId);
+    if (!anchor || tokens.length < 2 || tokens.some((token) => !token)) return null;
+    resource = makeTokenStackDragNode(tokens, anchor);
   } else if (preview.sourceType === "token") {
     const token = (app.state.tokens || []).find((candidate) => candidate.id === preview.resourceId);
     if (!token) return null;
@@ -2347,32 +2470,39 @@ function makeRemoteDragNode(preview) {
 
   const label = document.createElement("span");
   label.className = "remote-drag__label";
-  label.textContent = `${preview.name || "玩家"} 正在移动${preview.sourceType === "stack" ? ` ${preview.cardIds.length} 张牌` : ""}`;
+  label.textContent = `${preview.name || "玩家"} ${preview.released ? "已放下" : "正在移动"}${preview.sourceType === "stack" ? ` ${preview.cardIds.length} 张牌` : preview.sourceType === "token-stack" ? ` ${preview.tokenIds.length} 枚筹码` : ""}`;
   wrapper.append(resource, label);
   return wrapper;
 }
 
 function renderRemoteDrags() {
   if (!app.state) return;
-  for (const node of elements.world.querySelectorAll(".is-remote-source")) {
-    node.classList.remove("is-remote-source");
+  for (const node of elements.world.querySelectorAll(".is-remote-source, .is-remote-drop-source")) {
+    node.classList.remove("is-remote-source", "is-remote-drop-source");
   }
-  const nodes = new Map([...elements.remoteDragRoot.children].map((node) => [node.dataset.playerId, node]));
+  const nodes = new Map([...elements.remoteDragRoot.children].map((node) => [node.dataset.dragKey, node]));
   const visible = new Set();
-  for (const preview of app.remoteDrags.values()) {
+  for (const preview of [...app.remoteDrags.values(), ...app.remoteDrops.values()]) {
     if (preview.playerId === app.state.you.id) continue;
-    const signature = JSON.stringify([preview.sourceType, preview.resourceId, preview.cardIds, preview.placeFaceDown, app.state.revision]);
-    const old = nodes.get(preview.playerId);
+    const key = `${preview.playerId}:${preview.dragId}`;
+    const ended = app.endedRemoteDrags.get(key);
+    if (ended && (!Number.isSafeInteger(ended.revision) || app.state.revision >= ended.revision)) {
+      app.remoteDrops.delete(key);
+      if (app.remoteDrags.get(preview.playerId)?.dragId === preview.dragId) app.remoteDrags.delete(preview.playerId);
+      continue;
+    }
+    const signature = JSON.stringify([preview.sourceType, preview.resourceId, preview.cardIds, preview.tokenIds, preview.placeFaceDown, preview.released, app.state.revision]);
+    const old = nodes.get(key);
     const node = old?.dataset.signature === signature ? old : makeRemoteDragNode(preview);
     if (!node) continue;
-    visible.add(preview.playerId);
-    node.dataset.playerId = preview.playerId; node.dataset.signature = signature;
+    visible.add(key);
+    node.dataset.playerId = preview.playerId; node.dataset.dragKey = key; node.dataset.signature = signature;
     node.style.transform = `translate(${preview.x}px, ${preview.y}px)`;
     if (preview.sourceType === "card") node.querySelector(".remote-drag__resource").style.transform = `rotate(${preview.rotation || 0}deg)`;
     if (node !== old) { if (old) old.replaceWith(node); else elements.remoteDragRoot.append(node); }
-    const resourceIds = preview.sourceType === "stack" ? preview.cardIds : [preview.resourceId];
+    const resourceIds = preview.sourceType === "stack" ? preview.cardIds : preview.sourceType === "token-stack" ? preview.tokenIds : [preview.resourceId];
     for (const id of resourceIds) {
-      sourceNodeFor(preview.sourceType, id)?.classList.add("is-remote-source");
+      sourceNodeFor(preview.sourceType, id)?.classList.add(preview.released ? "is-remote-drop-source" : "is-remote-source");
     }
   }
   for (const [id, node] of nodes) if (!visible.has(id)) node.remove();
@@ -2424,19 +2554,14 @@ function clearCursorQueue() {
   app.cursorRequestController = null;
 }
 
+function dragPreview(drag) {
+  return { sourceType: drag.sourceType, resourceId: drag.resource?.id || null, dragId: drag.dragId,
+    x: drag.x, y: drag.y, rotation: drag.rotation || 0, placeFaceDown: drag.placeFaceDown === true };
+}
+
 function sendCursor(worldPoint) {
   if (!app.state || !app.connectionOpen || previewMode) return;
-  const drag = app.drag?.activated
-    ? {
-        sourceType: app.drag.sourceType,
-        resourceId: app.drag.resource?.id || null,
-        dragId: app.drag.dragId,
-        x: app.drag.x,
-        y: app.drag.y,
-        rotation: app.drag.rotation || 0,
-        placeFaceDown: app.drag.placeFaceDown === true
-      }
-    : null;
+  const drag = app.drag?.activated ? dragPreview(app.drag) : null;
   app.queuedCursorMessage = { type: "cursor", x: Math.round(worldPoint.x * 10) / 10, y: Math.round(worldPoint.y * 10) / 10, drag };
   scheduleCursorFlush();
 }
@@ -2457,7 +2582,7 @@ function clearDropTargets() {
   elements.publicZone.classList.remove("is-drop-target", "is-face-down-target");
   for (const zone of elements.handZones.querySelectorAll(".hand-zone")) zone.classList.remove("is-drop-target");
   for (const node of elements.objectsRoot.querySelectorAll(".is-drop-target")) node.classList.remove("is-drop-target");
-  for (const root of [elements.deckRoot, elements.cardsRoot]) for (const node of root.querySelectorAll(".is-drop-target")) node.classList.remove("is-drop-target");
+  for (const root of [elements.deckRoot, elements.cardsRoot, elements.tokenRoot]) for (const node of root.querySelectorAll(".is-drop-target")) node.classList.remove("is-drop-target");
   app.drag?.ghost.querySelector(".pile-drop-hint")?.classList.add("is-hidden");
   elements.handDrawer.classList.remove("is-drop-target");
   elements.openHand.classList.remove("is-drop-target");
@@ -2486,11 +2611,18 @@ function handTargetAt(point) {
 
 function bagTargetAt(point) {
   if (!app.drag || app.drag.sourceType === "deck" || ["bag", "mat"].includes(app.drag.resource?.kind)) return null;
-  return (app.state.objects || []).filter((object) => object.kind === "bag" && object.id !== app.drag.resource?.id && pointInside(point, object)).sort((a, b) => b.z - a.z)[0] || null;
+  return (app.state.objects || []).filter((object) => object.kind === "bag" && object.id !== app.drag.resource?.id && !resourceDropPending("object", object.id) && pointInside(point, object)).sort((a, b) => b.z - a.z)[0] || null;
 }
 
 function pileTargetAt(point) {
   const drag = app.drag;
+  if (drag && ["token", "token-stack"].includes(drag.sourceType)) {
+    const excluded = new Set(drag.sourceType === "token-stack" ? drag.stackTokens.map((token) => token.id) : [drag.resource.id]);
+    const radius = app.state.room.geometry.tokenSize / 2;
+    const token = (app.state.tokens || []).filter((token) => !excluded.has(token.id) && !visibleTokenStack(token.id).some((member) => member.locked || resourceDropPending("token", member.id))
+      && Math.hypot(point.x - token.x - radius, point.y - token.y - radius) <= radius).sort((a, b) => b.z - a.z)[0];
+    return token ? { type: "token", ...token } : null;
+  }
   if (!drag || !["card", "stack", "deck"].includes(drag.sourceType)) return null;
   const screen = worldToViewport(point), viewport = elements.viewport.getBoundingClientRect();
   const hit = document.elementFromPoint(viewport.left + screen.x, viewport.top + screen.y);
@@ -2503,9 +2635,9 @@ function pileTargetAt(point) {
       && Math.abs(-dx * Math.sin(angle) + dy * Math.cos(angle)) <= height / 2;
   };
   return [
-    ...(app.state.decks || []).filter((deck) => !excluded.has(deck.id) && onCard(deck, deck.top?.rotation || 0)).map((deck) => ({ type: "deck", ...deck })),
+    ...(app.state.decks || []).filter((deck) => !excluded.has(deck.id) && !resourceDropPending("deck", deck.id) && onCard(deck, deck.top?.rotation || 0)).map((deck) => ({ type: "deck", ...deck })),
     ...app.state.cards.filter((card) => card.zone === "public" && !excluded.has(card.id) && !card.locked && onCard(card)
-      && !visibleStackForCard(card.id).some((entry) => entry.locked)).map((card) => ({ type: "card", ...card }))
+      && !visibleStackForCard(card.id).some((entry) => entry.locked || resourceDropPending("card", entry.id))).map((card) => ({ type: "card", ...card }))
   ].sort((a, b) => b.z - a.z)[0] || null;
 }
 
@@ -2539,17 +2671,63 @@ function sourceNodeFor(sourceType, resourceId) {
   if (["card", "stack"].includes(sourceType)) {
     return elements.cardsRoot.querySelector(`[data-card-id="${resourceId}"]`);
   }
-  if (sourceType === "token") return elements.tokenRoot.querySelector(`[data-token-id="${resourceId}"]`);
+  if (["token", "token-stack"].includes(sourceType)) return elements.tokenRoot.querySelector(`[data-token-id="${resourceId}"]`);
   if (sourceType === "object") return elements.objectsRoot.querySelector(`[data-object-id="${resourceId}"]`);
   return elements.deckRoot.querySelector(`[data-deck-id="${resourceId || "main"}"]`);
 }
 
-function setDragSourceClasses(drag, active) {
-  const ids = drag.sourceType === "stack" ? drag.stackCards.map((card) => card.id) : [drag.resource?.id];
+function dragResourceIds(drag) {
+  return drag.sourceType === "stack" ? drag.stackCards.map((card) => card.id) : drag.sourceType === "token-stack" ? drag.stackTokens.map((token) => token.id) : [drag.resource?.id];
+}
+
+function setDragSourceClasses(drag, active, className = "is-source") {
+  const ids = dragResourceIds(drag);
   for (const id of ids) {
-    sourceNodeFor(drag.sourceType, id)?.classList.toggle("is-source", active);
-    if (["card", "stack"].includes(drag.sourceType)) elements.handCards.querySelector(`[data-card-id="${id}"]`)?.classList.toggle("is-source", active);
+    sourceNodeFor(drag.sourceType, id)?.classList.toggle(className, active);
+    if (["card", "stack"].includes(drag.sourceType)) elements.handCards.querySelector(`[data-card-id="${id}"]`)?.classList.toggle(className, active);
   }
+}
+
+function resourceDropPending(type, id) {
+  return app.pendingCommands.has(`drop:${type}:${id}`) || [...app.pendingDrops.values()].some((drop) => drop.viewerId === app.state?.you.id && drop.gameId === app.state?.room.gameId
+    && (((drop.sourceType === "stack" ? "card" : drop.sourceType === "token-stack" ? "token" : drop.sourceType) === type && dragResourceIds(drop).includes(id))
+      || (drop.target?.type === type && drop.target.id === id)));
+}
+
+function renderPendingDrops() {
+  for (const drop of app.pendingDrops.values()) {
+    if (drop.viewerId !== app.state?.you.id || drop.gameId !== app.state?.room.gameId || drop.epoch !== app.state?.room.epoch
+      || (drop.confirmed && (!Number.isSafeInteger(drop.confirmedRevision) || app.state.revision >= drop.confirmedRevision))) {
+      drop.settled = true;
+      drop.ghost.remove();
+    }
+    setDragSourceClasses(drop, !drop.settled, "is-drop-source");
+  }
+}
+
+function holdDroppedResource(drag) {
+  drag.viewerId = app.state.you.id; drag.gameId = app.state.room.gameId; drag.epoch = app.state.room.epoch;
+  drag.ghost.classList.add("is-settling");
+  drag.ghost.style.transform = `rotate(${drag.rotation || 0}deg)`;
+  drag.ghost.querySelector(".pile-drop-hint")?.classList.add("is-hidden");
+  app.pendingDrops.set(drag.dragId, drag);
+  renderPendingDrops();
+  if (app.queuedCursorMessage?.drag?.dragId === drag.dragId) app.queuedCursorMessage.drag = null;
+  const announce = () => {
+    if (!previewMode && app.connectionOpen) for (const drop of app.pendingDrops.values()) {
+      if (!drop.settled) void postRealtimeMessage({ type: "drag-drop", drag: dragPreview(drop) }, true);
+    }
+  };
+  announce();
+  if (!app.dropHeartbeat && !previewMode) app.dropHeartbeat = window.setInterval(announce, 1500);
+}
+
+function releaseDroppedResource(drag) {
+  app.pendingDrops.delete(drag.dragId);
+  drag.ghost.remove();
+  setDragSourceClasses(drag, false, "is-drop-source");
+  endRemoteDragPreview(drag.dragId);
+  if (!app.pendingDrops.size) { clearInterval(app.dropHeartbeat); app.dropHeartbeat = null; }
 }
 
 function startDrag(event, sourceType, resource = null) {
@@ -2566,10 +2744,14 @@ function startDrag(event, sourceType, resource = null) {
   }
 
   const stackCards = sourceType === "card" ? visibleStackForCard(resource.id) : [];
+  const stackTokens = sourceType === "token" ? visibleTokenStack(resource.id) : [];
+  if ([resource, ...stackCards, ...stackTokens].some((entry) => resourceDropPending(sourceType, entry.id))) return;
   if (stackCards.some((card) => card.locked)) { selectResource("card", resource.id); toast("牌堆里有锁定的牌，先解锁再移动。"); return; }
+  if (stackTokens.some((token) => token.locked)) { selectResource("token", resource.id); toast("这一叠有锁定的筹码，先解锁再移动。"); return; }
   if (stackCards.length >= 2) sourceType = "stack";
+  if (stackTokens.length >= 2) sourceType = "token-stack";
   const point = screenToWorld(event.clientX, event.clientY);
-  let sourcePosition = ["deck", "token", "object"].includes(sourceType)
+  let sourcePosition = ["deck", "token", "token-stack", "object"].includes(sourceType)
       ? { x: resource.x, y: resource.y, z: resource.z, rotation: sourceType === "deck" ? resource.top?.rotation || 0 : resource.rotation || 0 }
       : app.cardPositions.get(resource.id);
   if (!sourcePosition) return;
@@ -2581,6 +2763,8 @@ function startDrag(event, sourceType, resource = null) {
 
   const ghost = sourceType === "stack"
     ? makeStackDragNode(stackCards, resource)
+    : sourceType === "token-stack"
+      ? makeTokenStackDragNode(stackTokens, resource)
     : sourceType === "token"
       ? makeTokenNode({ ...resource, canControl: false }, { ghost: true })
       : sourceType === "object"
@@ -2603,7 +2787,7 @@ function startDrag(event, sourceType, resource = null) {
     ghost.append(hint);
   }
   ghost.style.zIndex = "190";
-  if (["card", "stack", "deck"].includes(sourceType)) {
+  if (["card", "stack", "deck", "token", "token-stack"].includes(sourceType)) {
     const hint = document.createElement("span");
     hint.className = "pile-drop-hint is-hidden";
     hint.textContent = "叠到顶部";
@@ -2621,6 +2805,7 @@ function startDrag(event, sourceType, resource = null) {
     sourceType,
     resource,
     stackCards,
+    stackTokens,
     ghost,
     sourceNode,
     offsetX: point.x - sourcePosition.x,
@@ -2658,7 +2843,7 @@ function moveDrag(event) {
     if (distance < 5) return;
     app.drag.activated = true;
     app.dragHeartbeat = window.setInterval(() => { if (app.drag?.activated) sendCursor(app.lastTablePoint || { x: app.drag.x, y: app.drag.y }); }, 500);
-    elements.dragRoot.replaceChildren(app.drag.ghost);
+    elements.dragRoot.append(app.drag.ghost);
     setDragSourceClasses(app.drag, true);
   }
   const point = screenToWorld(event.clientX, event.clientY);
@@ -2687,35 +2872,36 @@ function moveDrag(event) {
   updateDropTargets(point);
 }
 
-function cancelDrag({ releaseCapture = true } = {}) {
+function cancelDrag({ releaseCapture = true, settling = false } = {}) {
   const drag = app.drag;
   if (!drag) return;
   app.drag = null;
   clearInterval(app.dragHeartbeat); app.dragHeartbeat = null;
-  if (drag.activated) endRemoteDragPreview(drag.dragId);
+  if (drag.activated && !settling) endRemoteDragPreview(drag.dragId);
   setDragSourceClasses(drag, false);
   if (releaseCapture) {
     try { drag.sourceNode?.releasePointerCapture?.(drag.pointerId); } catch { /* Pointer already released. */ }
   }
-  elements.dragRoot.replaceChildren();
+  if (!settling) drag.ghost.remove();
   clearDropTargets();
 }
 
 function finishDrag(event) {
   if (!app.drag || event.pointerId !== app.drag.pointerId) return;
   const drag = app.drag;
-  const type = drag.sourceType === "stack" ? "card" : drag.sourceType;
+  const type = drag.sourceType === "stack" ? "card" : drag.sourceType === "token-stack" ? "token" : drag.sourceType;
   if (!drag.activated) {
     cancelDrag();
     selectResource(type, drag.resource.id);
     return;
   }
+  moveDrag(event);
   const point = screenToWorld(event.clientX, event.clientY);
   const handTargetId = handTargetAt(point);
   const bag = bagTargetAt(point);
   const pile = pileTargetAt(point);
   const hit = document.elementFromPoint(event.clientX, event.clientY);
-  const overlay = hit?.closest(".topbar, .side-panel, .library-panel, .aux-panel, .history-panel, .selection-dock, .table-rail, .zoom-controls, .world-overview");
+  const overlay = hit?.closest(".topbar, .side-panel, .library-panel, .aux-panel, .quick-chat, .history-panel, .selection-dock, .table-rail, .zoom-controls, .world-overview");
   const rect = elements.viewport.getBoundingClientRect();
   const inside = pointInside({ x: event.clientX, y: event.clientY }, { x: rect.left, y: rect.top, width: rect.width, height: rect.height });
   let command = null;
@@ -2727,7 +2913,8 @@ function finishDrag(event) {
       command = drag.sourceType === "deck" ? { type: "draw", deckId: drag.resource.id, ownerId: handTargetId, ...privatePoint }
         : { type: drag.sourceType === "stack" ? "move-stack" : "move-card", cardId: drag.resource.id, target: "hand", ownerId: handTargetId, ...privatePoint };
     } else if (pointInside(point, app.state.room.geometry.publicZone)) {
-      if (["token", "object", "deck"].includes(drag.sourceType)) command = {
+      if (drag.sourceType === "token-stack") command = { type: "move-token-stack", tokenId: drag.resource.id, x: drag.x, y: drag.y };
+      else if (["token", "object", "deck"].includes(drag.sourceType)) command = {
         type: "move-resource", resourceType: drag.sourceType, resourceId: drag.resource.id, x: drag.x, y: drag.y
       };
       else command = {
@@ -2737,15 +2924,25 @@ function finishDrag(event) {
       };
     }
   }
-  cancelDrag();
+  cancelDrag({ settling: Boolean(command) });
+  if (command) {
+    drag.target = pile ? { type: pile.type, id: pile.id } : bag ? { type: "object", id: bag.id } : null;
+    if (pile) {
+      drag.x = pile.x; drag.y = pile.y;
+      drag.ghost.style.left = `${drag.x}px`; drag.ghost.style.top = `${drag.y}px`;
+    }
+    holdDroppedResource(drag);
+  }
   selectResource(type, drag.resource.id);
-  if (command?.type === "stack-onto") {
+  if (command) {
     const intent = app.selectionIntent, playerId = app.state.you.id;
-    void sendCommand(command, { withReceipt: true }).then((receipt) => {
+    void sendCommand(command, { withReceipt: true, pendingKey: `drop:${type}:${drag.resource.id}`, dragId: drag.dragId }).then((receipt) => {
+      releaseDroppedResource(drag);
       const created = receipt?.createdResource;
       if (created && app.selectionIntent === intent && app.state?.you.id === playerId && !app.drag) selectResource(created.type, created.id, { preserveIntent: true });
+      renderTools();
     });
-  } else if (command) void sendCommand(command);
+  }
 }
 
 async function applyPreviewCommand(command) {
@@ -2781,7 +2978,7 @@ async function postRealtimeMessage(message, quiet = false) {
   });
 }
 
-async function sendCommand(command, { withReceipt = false } = {}) {
+async function sendCommand(command, { withReceipt = false, pendingKey = command.type, dragId } = {}) {
   if (app.previewTransition && !["restore-game", "restore-scene"].includes(command.type)) {
     toast("正在备份并切换试玩桌面，请稍候再操作。");
     return false;
@@ -2790,12 +2987,12 @@ async function sendCommand(command, { withReceipt = false } = {}) {
     toast("正在连接牌桌，请稍后再试。");
     return false;
   }
-  if (app.pendingCommands.has(command.type)) return false;
-  app.pendingCommands.add(command.type);
+  if (app.pendingCommands.has(pendingKey)) return false;
+  app.pendingCommands.add(pendingKey);
   if (app.state) renderTools();
   try {
     const viewerId = app.state?.you.id;
-    const result = previewMode ? await applyPreviewCommand(command) : await recovery.send(command);
+    const result = previewMode ? await applyPreviewCommand(command) : await recovery.send(command, { pendingKey, dragId });
     if (!result?.ok) return false;
     if (!previewMode && result.state?.you.id === viewerId && app.state?.you.id === viewerId && result.state.revision > app.state.revision) {
       app.state = result.state; app.player = result.state.you; renderRoom();
@@ -2806,7 +3003,7 @@ async function sendCommand(command, { withReceipt = false } = {}) {
     if (command.type === "set-turn" && app.state) renderTurn();
     return false;
   } finally {
-    app.pendingCommands.delete(command.type);
+    app.pendingCommands.delete(pendingKey);
     if (app.state) renderTools();
   }
 }
@@ -2867,7 +3064,7 @@ async function leaveCurrentSeat() {
 }
 
 async function requestCardFlip(cardId) {
-  if (app.pendingFlips.has(cardId)) return;
+  if (app.pendingFlips.has(cardId) || resourceDropPending("card", cardId)) return;
   app.pendingFlips.add(cardId);
   try {
     await sendCommand({ type: "flip-card", cardId });
@@ -2938,6 +3135,7 @@ elements.turnPlayerSelect.addEventListener("change", () => {
 });
 elements.randomTurn.addEventListener("click", () => sendCommand({ type: "random-turn" }));
 elements.nextTurn.addEventListener("click", () => sendCommand({ type: "advance-turn" }));
+elements.passTurn.addEventListener("click", () => sendCommand({ type: "advance-turn" }));
 elements.undoTable.addEventListener("click", () => sendCommand({ type: "undo" }));
 elements.drawCard.addEventListener("click", () => sendCommand({ type: "draw", deckId: activeDeck()?.id }));
 elements.dealCount.addEventListener("change", renderDealOptions);
@@ -3031,7 +3229,7 @@ function bindCardSurface(surface) {
     const button = event.target.closest("[data-card-action='flip']");
     if (!button) return;
     const card = app.state?.cards.find((item) => item.id === button.closest("[data-card-id]")?.dataset.cardId);
-    if (card?.canControl && card.zone === "public") void requestCardFlip(card.id);
+    if (card && canFlipCard(card)) void requestCardFlip(card.id);
   });
   surface.addEventListener("dblclick", (event) => {
     if (ignoreTableActivation(event)) return;
@@ -3039,7 +3237,7 @@ function bindCardSurface(surface) {
     const node = event.target.closest(".playing-card[data-card-id]");
     const card = app.state?.cards.find((item) => item.id === node?.dataset.cardId);
     if (!card) return;
-    if (card.zone === "public" && card.canControl && visibleStackForCard(card.id).length < 2) void requestCardFlip(card.id);
+    if (canFlipCard(card) && (card.zone === "hand" || visibleStackForCard(card.id).length < 2)) void requestCardFlip(card.id);
     else { selectResource("card", card.id); workspace.handleAction("inspect", selectedResource()); }
   });
 }
@@ -3160,7 +3358,7 @@ window.addEventListener("pointermove", (event) => {
     && event.clientX <= viewportRect.right
     && event.clientY >= viewportRect.top
     && event.clientY <= viewportRect.bottom;
-  const overStageControl = event.target.closest?.(".zoom-controls, .turn-banner, .reconnect-banner, .selection-dock");
+  const overStageControl = event.target.closest?.(".zoom-controls, .turn-indicator, .quick-chat, .reconnect-banner, .selection-dock");
   if (inside && !overStageControl && app.state) {
     const point = screenToWorld(event.clientX, event.clientY);
     app.lastTablePoint = point;
@@ -3398,6 +3596,10 @@ window.setInterval(() => {
       dragsChanged = true;
     }
   }
+  for (const [key, drop] of app.remoteDrops) {
+    if (drop.seenAt < now - 10000) { app.remoteDrops.delete(key); dragsChanged = true; }
+  }
+  for (const [key, ended] of app.endedRemoteDrags) if (ended.seenAt < now - 15000) app.endedRemoteDrags.delete(key);
   if (cursorsChanged) renderCursors();
   if (dragsChanged) renderRemoteDrags();
 }, 1000);
@@ -3437,6 +3639,6 @@ workspace = window.ParlorWorkspace.create({
     return fetchJson(url.toString());
   }
 });
-feedback = window.ParlorFeedback.create({ app, toast, clearSelection, sendCommand, postRealtimeMessage, openChat: () => workspace.showPanel("chat"), openHistory: showHistory, previewMode });
+feedback = window.ParlorFeedback.create({ app, toast, clearSelection, sendCommand, postRealtimeMessage, openChat: () => workspace.showChat(), openHistory: showHistory, previewMode });
 syncToolDrawer();
 void initialize();

@@ -54,7 +54,7 @@ test("an intervening remote spawn cannot become the local request's selection", 
   assert.equal(selected.id, client.app.state.objects.at(-1).id);
 });
 
-test("late resource receipts respect a newer selection and a newly opened mobile chat panel", async () => {
+test("late resource receipts respect a newer selection and an open mobile chat composer", async () => {
   const client = await loadClient({ width: 390, height: 844 });
   holdSpawns(client);
   await client.dispatch(client.$("open-library"), "click");
@@ -63,8 +63,16 @@ test("late resource receipts respect a newer selection and a newly opened mobile
   await client.dispatch(client.$("open-chat"), "click");
   await release(client);
   assert.equal(client.app.selection.id, "main");
-  assert.equal(client.$("chat-panel").classList.contains("is-open"), true);
+  assert.equal(client.$("quick-chat").classList.contains("is-hidden"), false);
+  assert.equal(client.$("chat-panel").classList.contains("is-open"), false);
+  assert.equal(client.document.activeElement, client.$("quick-chat-input"));
   assert.equal(client.app.state.decks.length, 2);
+  await client.dispatch(client.$("close-quick-chat"), "click");
+  await client.dispatch(client.document.querySelector('.asset-add[data-add-asset="note"]'), "click");
+  await client.dispatch(client.$("open-chat"), "click");
+  await release(client);
+  assert.equal(client.app.selection.id, "main", "opening chat alone must keep a late receipt from selecting its resource");
+  assert.equal(client.document.activeElement, client.$("quick-chat-input"));
 });
 
 test("failed requests clear their pending quantity and do not strand later requests", async () => {

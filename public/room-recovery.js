@@ -88,7 +88,7 @@
         const result = await ui.postMessage(item.record.message);
         if (!result?.ok) throw new Error("操作回执尚未收到。");
         ui.receiveState?.(result.state);
-        pending.delete(item.record.id); app.pendingCommands.delete(item.record.message.command.type);
+        pending.delete(item.record.id); app.pendingCommands.delete(item.record.pendingKey || item.record.message.command.type);
         persistPendingFallback();
         await vault.deletePending(item.record.id).catch(() => {});
         item.resolve?.(result);
@@ -99,7 +99,7 @@
           if (!item.warned) { item.warned = true; ui.toast(error.code === "SAVE_FAILED" ? "操作已到房主桌面，正在等待自动存档。" : "操作正在确认，连接恢复后会继续核对。不会重复执行。", "info"); }
           ui.onUncertain?.(error);
         } else {
-          pending.delete(item.record.id); app.pendingCommands.delete(item.record.message.command.type);
+          pending.delete(item.record.id); app.pendingCommands.delete(item.record.pendingKey || item.record.message.command.type);
           persistPendingFallback(); await vault.deletePending(item.record.id).catch(() => {});
           item.resolve?.(null); ui.toast(error.message, "error");
           if (error.status === 401) ui.onSessionExpired?.();
@@ -118,17 +118,17 @@
         const saved = [...await vault.listPending().catch(() => []), ...readSession(pendingKey(), [])];
         for (const record of saved) {
           if (record.recordId !== recordId || record.playerId !== app.state.you.id || pending.has(record.id) || record.message?.type !== "command") continue;
-          pending.set(record.id, { record, retried: true }); app.pendingCommands.add(record.message.command.type);
+          pending.set(record.id, { record, retried: true }); app.pendingCommands.add(record.pendingKey || record.message.command.type);
         }
         notifyPending(); retry();
       } finally { restoring = false; }
     }
-    async function send(command) {
+    async function send(command, { pendingKey = command.type, dragId } = {}) {
       const state = app.state;
       recordId = `${state.room.gameId}:${state.you.id}`;
       const id = root.crypto.randomUUID();
-      const record = { id, recordId, playerId: state.you.id, updatedAt: Date.now(), message: {
-        type: "command", id, gameId: state.room.gameId, epoch: state.room.epoch, baseRevision: state.revision, command: structuredClone(command)
+      const record = { id, recordId, pendingKey, playerId: state.you.id, updatedAt: Date.now(), message: {
+        type: "command", id, ...(dragId ? { dragId } : {}), gameId: state.room.gameId, epoch: state.room.epoch, baseRevision: state.revision, command: structuredClone(command)
       } };
       let resolve;
       const result = new Promise((done) => { resolve = done; });

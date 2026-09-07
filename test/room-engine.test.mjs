@@ -368,19 +368,19 @@ test("deals a configurable opening hand atomically and keeps every hand private"
   assert.equal(projectRoom(room, host.id).deck.count, 8);
 });
 
-test("keeps the shared turn marker host-controlled, synchronized, and undoable", () => {
+test("keeps the shared turn marker synchronized and undoable with host and current-player control", () => {
   const { room, host, guest } = setupRoom();
   assert.equal(projectRoom(room, host.id).turn.activePlayerId, null);
   assert.throws(
     () => applyCommand(room, guest.id, { type: "set-turn", playerId: guest.id }),
-    (error) => error instanceof RoomError && error.code === "HOST_ONLY"
+    (error) => error instanceof RoomError && error.code === "NOT_YOUR_TURN"
   );
 
   applyCommand(room, host.id, { type: "set-turn", playerId: guest.id });
   assert.equal(projectRoom(room, host.id).turn.activePlayerId, guest.id);
   assert.equal(projectRoom(room, guest.id).turn.activePlayerId, guest.id);
 
-  applyCommand(room, host.id, { type: "advance-turn" });
+  applyCommand(room, guest.id, { type: "advance-turn" });
   assert.equal(projectRoom(room, guest.id).turn.activePlayerId, host.id);
   applyCommand(room, host.id, { type: "undo" });
   assert.equal(projectRoom(room, guest.id).turn.activePlayerId, guest.id);

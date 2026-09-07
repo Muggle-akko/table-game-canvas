@@ -11,6 +11,7 @@ import {
   joinRoom,
   playerForSession,
   publicStackForCard,
+  tokenStackMembers,
   cardSource,
   isExposedDeckCard,
   projectRoom,
@@ -87,16 +88,19 @@ function safeRoomMatch(room, value) {
   return String(value ?? "").toUpperCase() === room.code;
 }
 
+const validDragId = (value) => typeof value === "string" && /^[\w-]{1,80}$/.test(value);
+
 function sanitizeDragPreview(room, player, value, stackCache) {
   if (!value || typeof value !== "object") return null;
   const sourceType = String(value.sourceType || "");
-  if (!["card", "stack", "deck", "token", "object"].includes(sourceType)) return null;
+  if (!["card", "stack", "deck", "token", "token-stack", "object"].includes(sourceType)) return null;
   const x = Number(value.x);
   const y = Number(value.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
 
   let resourceId = null;
   let cardCount = null;
+  let tokenCount = null;
   if (sourceType === "stack") {
     resourceId = String(value.resourceId || "");
     try {
@@ -112,6 +116,11 @@ function sanitizeDragPreview(room, player, value, stackCache) {
       if (error instanceof RoomError) return null;
       throw error;
     }
+  } else if (sourceType === "token-stack") {
+    resourceId = String(value.resourceId || "");
+    const tokens = tokenStackMembers(room.tokens.values(), resourceId);
+    if (tokens.length < 2 || tokens.some((token) => token.locked)) return null;
+    tokenCount = tokens.length;
   } else if (sourceType === "card") {
     resourceId = String(value.resourceId || "");
     const card = room.cards.get(resourceId);
@@ -135,6 +144,7 @@ function sanitizeDragPreview(room, player, value, stackCache) {
     sourceType,
     resourceId,
     ...(cardCount ? { cardCount } : {}),
+    ...(tokenCount ? { tokenCount } : {}),
     ...(typeof value.dragId === "string" && /^[\w-]{1,80}$/.test(value.dragId) ? { dragId: value.dragId } : {}),
     x: clampWorld(x, "x"),
     y: clampWorld(y, "y"),
@@ -223,8 +233,9 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
       for (const id of beforePlayers) if (!room.players.has(id)) broadcastCursorLeave(id);
     }
     try { await persist(); }
-    catch (error) { broadcastState(); throw error; }
+    catch (error) { broadcastState(); finishDragSignal(playerId, message.dragId, room.revision); throw error; }
     broadcastState();
+    finishDragSignal(playerId, message.dragId, room.revision);
     return {
       ok: true, revision: room.revision, duplicate: Boolean(previous), durable: Boolean(persistence),
       ...(room.players.has(playerId) ? { state: projectRoom(room, playerId) } : {}),
@@ -267,6 +278,15 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
     signals.push({ sequence: ++signalSequence, at: Date.now(), payload, exceptPlayerId });
     if (signals.length > 512) signals.splice(0, signals.length - 512);
     for (const stream of streams) if (stream.playerId !== exceptPlayerId) writeEvent(stream, payload);
+  };
+
+  const finishDragSignal = (playerId, dragId, revision) => {
+    if (!validDragId(dragId)) return;
+    const key = `${playerId}:${dragId}`;
+    revision ??= endedDrags.get(key)?.revision;
+    endedDrags.set(key, { at: Date.now(), revision });
+    if (endedDrags.size > 256) endedDrags.delete(endedDrags.keys().next().value);
+    broadcastSignal({ type: "drag-end", playerId, dragId, ...(Number.isSafeInteger(revision) ? { revision } : {}) });
   };
 
   const broadcastCursorLeave = (playerId) => broadcastSignal({ type: "cursor-leave", playerId });
@@ -324,7 +344,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
           const card = room.cards.get(resourceId);
           if (!card) throw new RoomError("ASSET_NOT_FOUND", "图片资源不存在。", 404);
           const canSeeFace = ((card.zone === "public" || isExposedDeckCard(room, card)) && card.faceUp)
-            || (card.zone === "hand" && card.ownerId === player.id);
+            || (card.zone === "hand" && (card.ownerId === player.id || card.faceUp));
           const canSeeBack = ["public", "hand"].includes(card.zone) || isExposedDeckCard(room, card);
           if (kind === "card" ? !canSeeFace : !canSeeBack) throw new RoomError("ASSET_FORBIDDEN", "你无权查看这张牌的图片。", 403);
           const source = cardSource(room, card);
@@ -494,11 +514,16 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
           return true;
         }
 
+        if (message.type === "drag-drop") {
+          const drag = !endedDrags.has(`${player.id}:${message.drag?.dragId}`) && sanitizeDragPreview(room, player, message.drag, stackCache);
+          if (drag && validDragId(drag.dragId)) broadcastSignal({ type: "drag-drop", playerId: player.id, name: player.name, color: player.color, drag }, player.id);
+          sendJson(request, response, 200, { ok: true });
+          return true;
+        }
+
         if (message.type === "drag-end") {
-          const dragId = typeof message.dragId === "string" && /^[\w-]{1,80}$/.test(message.dragId) ? message.dragId : null;
-          if (dragId) endedDrags.set(`${player.id}:${dragId}`, Date.now());
-          if (endedDrags.size > 256) endedDrags.delete(endedDrags.keys().next().value);
-          broadcastSignal({ type: "drag-end", playerId: player.id, ...(dragId ? { dragId } : {}) }, player.id);
+          if (validDragId(message.dragId)) finishDragSignal(player.id, message.dragId);
+          else broadcastSignal({ type: "drag-end", playerId: player.id }, player.id);
           sendJson(request, response, 200, { ok: true });
           return true;
         }
@@ -547,7 +572,11 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
 
         if (message.type === "command") {
           if (closing) throw new RoomError("ROOM_CLOSING", "房主正在保存并关闭这桌，请稍后续局。", 503);
-          sendJson(request, response, 200, await tracked(executeCommand(player.id, message)));
+          try { sendJson(request, response, 200, await tracked(executeCommand(player.id, message))); }
+          catch (error) {
+            if ((error instanceof RoomError || error instanceof RoomAssetError) && error.status < 500 && error.status !== 408) finishDragSignal(player.id, message.dragId);
+            throw error;
+          }
           return true;
         }
 
@@ -568,7 +597,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
   };
 
   const heartbeat = setInterval(() => {
-    for (const [id, at] of endedDrags) if (at < Date.now() - 15000) endedDrags.delete(id);
+    for (const [id, ended] of endedDrags) if (ended.at < Date.now() - 15000) endedDrags.delete(id);
     while (signals.length && signals[0].at < Date.now() - 15000) signals.shift();
     for (const [session, polling] of pollingSessions) {
       if (polling.at >= Date.now() - 30000 && room.players.has(polling.playerId)) continue;

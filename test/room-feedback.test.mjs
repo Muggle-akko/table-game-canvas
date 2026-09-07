@@ -24,7 +24,10 @@ test("actions and remote chat surface once, remain text-only, and expire without
   assert.match($("room-notices").textContent, /客人B.*<img src=x> 出哪张？/);
   assert.equal($("room-notices").querySelector("img"), null);
   await client.dispatch(document.querySelector(".room-notice.is-chat"), "click");
-  assert.equal($("chat-panel").classList.contains("is-open"), true);
+  assert.equal($("quick-chat").classList.contains("is-hidden"), false);
+  assert.equal($("chat-panel").classList.contains("is-open"), false);
+  assert.match($("quick-chat-message").textContent, /<img src=x> 出哪张？/);
+  assert.equal($("quick-chat-message").querySelector("img"), null);
   assert.equal($("room-notices").children.length, 0);
 });
 

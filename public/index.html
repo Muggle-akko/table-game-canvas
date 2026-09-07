@@ -155,9 +155,12 @@
           </div>
           <div id="local-cursor-root" class="local-cursor-root" aria-hidden="true"></div>
         </div>
-        <button id="turn-banner" class="turn-banner is-hidden" type="button" aria-label="定位到当前行动玩家">
-          <i aria-hidden="true"></i><strong id="turn-banner-name">当前行动</strong>
-        </button>
+        <div id="turn-indicator" class="turn-indicator is-hidden">
+          <button id="turn-banner" class="turn-banner is-hidden" type="button" aria-label="定位到当前行动玩家">
+            <i aria-hidden="true"></i><strong id="turn-banner-name">当前行动</strong>
+          </button>
+          <button id="pass-turn" class="turn-pass is-hidden" type="button" title="结束回合，交给下一位"><span>结束回合</span><i data-ph="arrow-right"></i></button>
+        </div>
 
         <nav class="table-rail" aria-label="桌面快捷工具">
           <div class="table-rail__group">
@@ -165,7 +168,7 @@
               <i data-ph="package"></i><b>资源</b>
             </button>
             <button id="open-world" class="rail-button" type="button" aria-controls="world-panel" aria-expanded="false" data-tooltip="桌面导航" aria-label="桌面导航"><i data-ph="crosshair"></i><b>世界</b></button>
-            <button id="open-chat" class="rail-button" type="button" aria-controls="chat-panel" aria-expanded="false" data-tooltip="聊天 · C" aria-label="聊天"><i data-ph="users-three"></i><b>聊天</b><span id="chat-unread" class="chat-unread is-hidden"></span></button>
+            <button id="open-chat" class="rail-button" type="button" aria-controls="quick-chat" aria-expanded="false" data-tooltip="聊天 · C" aria-label="聊天"><i data-ph="users-three"></i><b>聊天</b><span id="chat-unread" class="chat-unread is-hidden"></span></button>
             <button id="open-history" class="rail-button" type="button" aria-controls="history-panel" aria-expanded="false" data-tooltip="操作历史 · L" aria-label="操作历史"><i data-ph="clock-counter-clockwise"></i><b>历史</b></button>
           </div>
           <div class="table-rail__divider" aria-hidden="true"></div>
@@ -181,6 +184,16 @@
             </button>
           </div>
         </nav>
+
+        <section id="quick-chat" class="quick-chat is-hidden" aria-label="轻量聊天">
+          <header>
+            <button id="chat-drag-handle" class="quick-chat__handle" type="button" aria-label="移动聊天框，方向键微调" title="拖动移动 · 方向键微调"><i data-ph="users-three"></i><span>聊两句</span><span class="quick-chat__grip" aria-hidden="true">⠿</span></button>
+            <button id="open-chat-history" type="button" aria-label="查看全部聊天记录" title="全部消息"><i data-ph="clock-counter-clockwise"></i></button>
+            <button id="close-quick-chat" type="button" aria-label="收起聊天框"><i data-ph="x"></i></button>
+          </header>
+          <div id="quick-chat-message" class="quick-chat__message" role="log" aria-live="polite"></div>
+          <form id="quick-chat-form" class="chat-form"><input id="quick-chat-input" aria-label="聊两句，发送给同桌朋友" placeholder="说点什么…" maxlength="280" autocomplete="off" /><button type="submit" aria-label="发送聊天"><i data-ph="arrow-up"></i></button></form>
+        </section>
 
         <section id="selection-dock" class="selection-dock is-hidden" aria-label="已选资源操作">
           <button id="selection-close" class="selection-dock__close" type="button" aria-label="取消选择"><i data-ph="x"></i></button>
@@ -205,7 +218,7 @@
         </div>
         <div id="minimap-panel" class="world-overview is-hidden" role="group" aria-label="小地图"><canvas id="minimap" width="360" height="216" tabindex="0" aria-label="桌面小地图，点击定位，方向键移动镜头"></canvas><button id="go-home" type="button" aria-label="回到主桌" title="回到主桌"><i data-ph="cards-three"></i></button></div>
         <button id="open-hand" class="hand-toggle" type="button" aria-expanded="false"><i data-ph="cards-three"></i><span>我的手牌</span><b id="hand-count">0</b></button>
-        <section id="hand-drawer" class="hand-drawer is-hidden" aria-label="我的私有手牌"><header><strong title="仅自己可见">手牌 <i data-ph="eye-slash"></i></strong><div class="hand-drawer-actions"><button id="focus-private-zone" type="button" title="在桌面自由摆放私有牌">到私人区</button><button id="arrange-private-cards" type="button" title="整理自己的私有牌">整理</button><button id="close-hand" type="button" aria-label="收起手牌"><i data-ph="x"></i></button></div></header><div id="hand-cards" class="hand-cards"></div></section>
+        <section id="hand-drawer" class="hand-drawer is-hidden" aria-label="我的手牌"><header><strong title="未展示的牌仅自己可见">手牌 <i data-ph="cards-three"></i></strong><div class="hand-drawer-actions"><button id="focus-private-zone" type="button" title="在桌面自由摆放手牌">到私人区</button><button id="arrange-private-cards" type="button" title="整理自己的手牌">整理</button><button id="close-hand" type="button" aria-label="收起手牌"><i data-ph="x"></i></button></div></header><div id="hand-cards" class="hand-cards"></div></section>
 
         <div id="reconnect-banner" class="reconnect-banner is-hidden" role="status">
           <span></span><strong id="reconnect-label">网络有波动，正在恢复同步…</strong>
@@ -343,12 +356,12 @@
         </header>
         <div class="help-grid help-grid--compact">
           <article><span>01</span><strong>拖动与旋转</strong><p>拖动资源改变位置。手机手牌横滑浏览，向桌面拖出出牌。拖牌时按 <kbd>Q</kbd>/<kbd>E</kbd>，或按住 <kbd>⌥</kbd> 左右移动即可旋转。</p></article>
-          <article><span>02</span><strong>整组拿起来</strong><p>重叠的牌会叠成一组，拖动时整组一起走。轻点后可抽一张、洗牌或展开。牌盒双击抽牌，拖动移动整副。</p></article>
-          <article><span>03</span><strong>私人区随手摆</strong><p>按 <kbd>I</kbd> 看手牌，点「到私人区」可自由摆放和旋转。点朋友的牌背会用你的颜色标记 8 秒，可连续选择多张，再由朋友交给你。按 <kbd>L</kbd> 查历史。</p></article>
-          <article><span>04</span><strong>下次接着玩</strong><p>存档保留整张桌面的布置，手牌在存档中归回牌盒。存档存在当前浏览器，也可以导出文件。</p></article>
+          <article><span>02</span><strong>整组拿起来</strong><p>牌与筹码都能拖到同类资源上叠放，拖动时整叠一起走。轻点后可取出单个或展开；牌堆还可以洗牌。</p></article>
+          <article><span>03</span><strong>私人区随手摆</strong><p>按 <kbd>I</kbd> 看手牌，双击或点「展示手牌」原地亮牌，再点一次收回展示。点朋友的牌可提出交付请求。按 <kbd>C</kbd> 打开可拖动的小聊天框。</p></article>
+          <article><span>04</span><strong>下次接着玩</strong><p>完整对局存档保留手牌、展示状态、牌序和桌面布置，可保存到当前浏览器或导出文件。房主与当前回合者都能转交行动标记。</p></article>
         </div>
         <footer class="help-sheet__footer">
-          <p>手牌只有自己能看到</p>
+          <p>未展示的手牌仅自己可见</p>
           <button id="start-playing" class="primary-button" type="button">开始</button>
         </footer>
       </section>
