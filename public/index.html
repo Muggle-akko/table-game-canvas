@@ -311,8 +311,9 @@
           <button id="close-library" type="button" aria-label="关闭资源库"><i data-ph="x"></i></button>
         </header>
         <div class="library-panel__body">
-          <input id="library-search" type="search" placeholder="搜索资源" aria-label="搜索资源" autocomplete="off" />
+          <div class="library-search"><input id="library-search" type="search" placeholder="搜索棋类、牌盒、小物…" aria-label="搜索资源" autocomplete="off" /><button id="library-search-clear" class="is-hidden" type="button" aria-label="清空搜索"><i data-ph="x"></i></button></div>
           <nav id="library-tabs" class="library-tabs" aria-label="资源分类"><button type="button" data-category="all" class="is-active" aria-pressed="true">全部</button><button type="button" data-category="sets" aria-pressed="false">套装</button><button type="button" data-category="packs" aria-pressed="false">牌盒</button><button type="button" data-category="objects" aria-pressed="false">小物</button><button type="button" data-category="boards" aria-pressed="false">棋盘</button><button type="button" data-category="favorites" aria-pressed="false">收藏</button></nav>
+          <div class="library-results"><button id="library-scope" class="is-hidden" type="button" aria-label="返回全部资源"></button><output id="library-result-count" aria-live="polite" aria-atomic="true"></output></div>
           <div id="pack-library" class="pack-library"></div>
         </div>
         <footer class="library-footer"><button id="import-pack" type="button"><i data-ph="arrow-up"></i>导入牌盒</button></footer>
@@ -357,8 +358,8 @@
           <button id="close-help" class="help-sheet__close" type="button" aria-label="关闭"><i data-ph="x"></i></button>
         </header>
         <div class="help-grid help-grid--compact">
-          <article><span>01</span><strong>拖动与旋转</strong><p>拖动资源改变位置。手机手牌横滑浏览，向桌面拖出出牌。拖牌时按 <kbd>Q</kbd>/<kbd>E</kbd>，或按住 <kbd>⌥</kbd> 左右移动即可旋转。</p></article>
-          <article><span>02</span><strong>整组与多选</strong><p>牌与筹码可叠放。桌面端按住 <kbd>Shift</kbd> 点选增减，或从空白处拖框选择；松开 Shift 后拖动任一已选物件一起移动。<kbd>Esc</kbd> 取消多选。</p></article>
+          <article><span>01</span><strong>拖动与旋转</strong><p>拖动资源改变位置；棋盘拖边框，内部空白处拖动镜头。拖牌时按 <kbd>Q</kbd>/<kbd>E</kbd>，或按住 <kbd>⌥</kbd> 左右移动即可旋转。手机手牌横滑浏览、向桌面拖出。</p></article>
+          <article><span>02</span><strong>整组与多选</strong><p>按住 <kbd>Shift</kbd> 点选增减，或从空白处拖框选择；松开 Shift 后拖动任一已选物件一起移动。<kbd>Shift F</kbd> 聚焦所选，<kbd>F</kbd> 看全桌，<kbd>Esc</kbd> 取消。</p></article>
           <article><span>03</span><strong>私人区随手摆</strong><p>按 <kbd>I</kbd> 看手牌，双击或点「展示手牌」原地亮牌，再点一次收回展示。点朋友的牌可提出交付请求。按 <kbd>C</kbd> 打开可拖动的小聊天框。</p></article>
           <article><span>04</span><strong>下次接着玩</strong><p>完整对局存档保留手牌、展示状态、牌序和桌面布置，可保存到当前浏览器或导出文件。房主与当前回合者都能转交行动标记。</p></article>
         </div>

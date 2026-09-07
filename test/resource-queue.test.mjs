@@ -7,7 +7,7 @@ function holdSpawns(client) {
     globalThis.originalPreview = ParlorPreview;
     globalThis.heldSpawns = [];
     globalThis.ParlorPreview = { ...ParlorPreview, applyCommand(model, viewer, command, options) {
-      if (options?.withReceipt && ["add-pack", "spawn-resource"].includes(command.type)) {
+      if (options?.withReceipt && ["add-pack", "spawn-resource", "spawn-set"].includes(command.type)) {
         return new Promise((resolve, reject) => heldSpawns.push({
           command, resolve: () => resolve(originalPreview.applyCommand(model, viewer, command, options)), reject
         }));
@@ -106,4 +106,49 @@ test("identity changes cancel unsent resource takes and never restore the prior 
   assert.equal(client.context.heldSpawns.length, 0);
   assert.equal(client.document.querySelector('.asset-add[data-add-asset="pack:uno"]').dataset.pendingCount, undefined);
   assert.equal(client.app.selection, null);
+});
+
+test("queued sets reserve their full footprint through failures and clear the pending quantity", async () => {
+  const client = await loadClient(); holdSpawns(client);
+  await client.dispatch(client.$("open-library"), "click");
+  const button = client.document.querySelector('.asset-add[data-add-asset="set:chess"]');
+  for (let index = 0; index < 3; index++) await client.dispatch(button, "click");
+  assert.equal(button.dataset.pendingCount, "3"); assert.equal(client.context.heldSpawns.length, 1);
+  await release(client, true); await release(client); await release(client);
+  const boards = client.app.state.objects.filter((object) => object.resourceId === "board-chess");
+  assert.equal(boards.length, 2);
+  const [a, b] = boards, set = client.context.ParlorEngine.BOARD_GAME_SETS.find((set) => set.id === "chess");
+  assert.ok(a.x + set.width <= b.x || b.x + set.width <= a.x || a.y + set.height <= b.y || b.y + set.height <= a.y, "boards and guides never overlap each other");
+  assert.equal(button.dataset.pendingCount, undefined);
+  assert.equal(client.document.querySelector('.asset-add[data-add-asset="set:chess"]'), button);
+  assert.equal(client.app.selection.id, b.id);
+});
+
+test("late set receipts do not take over camera navigation or an already-open chat input", async () => {
+  for (const action of ["zoom", "return-to-view", "chat"]) {
+    const client = await loadClient(); holdSpawns(client);
+    if (action === "chat") await client.dispatch(client.$("open-chat"), "click");
+    await client.dispatch(client.$("open-library"), "click");
+    const button = client.document.querySelector('.asset-add[data-add-asset="set:aeroplane"]'); button.focus();
+    await client.dispatch(button, "click");
+    const initial = { ...client.app.camera };
+    if (action === "chat") {
+      client.$("quick-chat-input").focus();
+      await client.advanceTimers(50);
+      assert.equal(client.document.activeElement, client.$("quick-chat-input"), "the library's opening timer cannot steal an intervening chat focus");
+    }
+    else {
+      await client.dispatch(client.$("zoom-in"), "click");
+      if (action === "return-to-view") client.vm(`app.camera = ${JSON.stringify(initial)}; applyCamera();`);
+    }
+    const camera = { ...client.app.camera };
+    await release(client);
+    assert.deepEqual({ ...client.app.camera }, camera, action);
+    assert.equal(client.$("library-panel").classList.contains("is-open"), true);
+    assert.ok(client.app.state.objects.some((object) => object.resourceId === "board-aeroplane"));
+    if (action === "chat") {
+      assert.equal(client.document.activeElement, client.$("quick-chat-input"));
+      assert.equal(client.app.selection, null);
+    }
+  }
 });

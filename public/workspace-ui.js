@@ -17,14 +17,24 @@
     const $ = (id) => document.getElementById(id);
     const vault = root.ParlorVault;
     const catalog = root.ParlorEngine.RESOURCE_CATALOG;
-    let category = "all", importedPacks = [], scenes = [], previews = [], favorites = vault.favorites();
+    const resourceKeywords = new Map();
+    for (const set of root.ParlorEngine.BOARD_GAME_SETS) for (const id of new Set(set.members.map((member) => member.resourceId))) {
+      resourceKeywords.set(id, `${resourceKeywords.get(id) || ""} ${set.label} ${set.keywords}`);
+    }
+    let category = "all", gameScope = null, importedPacks = [], scenes = [], previews = [], favorites = vault.favorites();
     let previewListSignature = "";
     let librarySignature = "", locationsSignature = "", handSignature = "", chatSignature = "";
     let initializedRoom = false, openAux = null, returnFocus = null, editorId = null, saving = false;
     let libraryDrag = null, lastDragAt = 0, spawnNumber = 0, spawning = false, seenMessages = new Set();
     let chatPosition = null, chatDrag = null, chatSending = false;
     const quickChat = $("quick-chat"), chatHandle = $("chat-drag-handle");
-    const spawnQueue = [], pendingAssets = new Map();
+    const spawnQueue = [], pendingAssets = new Map(), pendingPlacements = new Set();
+    const libraryCards = new Map(), pendingThumbnails = new Map();
+    const libraryBody = ui.elements.libraryPanel.querySelector(".library-panel__body");
+    const thumbnailObserver = typeof root.IntersectionObserver === "function" ? new root.IntersectionObserver((entries) => {
+      if (!ui.elements.libraryPanel.classList.contains("is-open")) return;
+      for (const entry of entries) if (entry.isIntersecting) hydrateThumbnail(entry.target);
+    }, { root: libraryBody, rootMargin: "160px 0px" }) : null;
     let mapBounds = { x: -200, y: -200, width: 2200, height: 1500 };
     const panels = { world: $("world-panel"), chat: $("chat-panel"), saves: $("saves-panel") };
     const auxBackdrop = button("", "aux-backdrop is-hidden");
@@ -48,7 +58,9 @@
       const local = importedPacks.map(({ id, pack }) => ({
         key: `import:${id}`, type: "import", id: pack.id, localId: id, label: pack.name, description: `${pack.cards.length} 张牌 · 我的导入`, category: "packs", count: pack.cards.length, pack
       }));
-      const objects = catalog.map((resource) => ({ key: resource.id, type: "object", id: resource.id, label: resource.label, description: resource.description, category: resource.kind === "mat" ? "boards" : "objects", resource }));
+      const objects = catalog.map((resource) => ({ key: resource.id, type: "object", id: resource.id, label: resource.label, description: resource.description,
+        keywords: resourceKeywords.get(resource.id),
+        category: resource.kind === "mat" ? "boards" : "objects", resource }));
       const saved = (ui.app.state?.templates || []).map((template) => ({
         key: template.id, type: "saved", id: template.id, label: template.label, description: `${template.count} ${template.kind === "deck" ? "张" : "件"} · 同桌收藏`, category: "favorites", kind: template.kind, count: template.count, unit: template.kind === "deck" ? "张" : "件", canDelete: template.canDelete
       }));
@@ -92,7 +104,7 @@
         node.append(body, el("strong", "bag-label", object.label));
       } else if (object.kind === "mat") {
         node.dataset.pattern = object.pattern;
-        const heading = el("div", "mat-heading"); heading.append(el("strong", "", object.label));
+        const heading = el("div", "mat-heading"); heading.dataset.matHandle = "heading"; heading.append(el("strong", "", object.label));
         node.append(heading);
         const board = root.ParlorBoardArt.board(object.pattern);
         if (board) { node.classList.add("is-game-board"); node.append(board); }
@@ -101,6 +113,9 @@
           const slots = el("div", "poker-mat-slots");
           for (const label of ["翻", "牌", "", "转", "河"]) slots.append(el("span", "", label));
           node.append(slots, el("div", "poker-mat-pot", "底池"));
+        }
+        for (const edge of ["top", "right", "bottom", "left"]) {
+          const handle = el("span", "mat-edge"); handle.dataset.matHandle = edge; handle.setAttribute("aria-hidden", "true"); node.append(handle);
         }
       }
       if (!ghost) ui.appendLockIndicator(node, object.locked);
@@ -142,58 +157,143 @@
       return visual;
     }
 
-    function renderLibrary(force = false) {
-      if (!ui.app.state) return;
-      const term = $("library-search").value.trim().toLowerCase();
-      const all = entries();
-      const signature = JSON.stringify([category, term, all.map(({ key, label, description }) => [key, label, description]), [...favorites], ui.app.connectionOpen, ui.app.state.you.id, ui.app.state.you.role]);
-      if (!force && signature === librarySignature) return;
-      librarySignature = signature;
-      const filtered = all.filter((entry) => (category === "all" || (category === "favorites" ? favorites.has(entry.key) || entry.type === "saved" : entry.category === category))
-        && `${entry.id} ${entry.label} ${entry.description} ${entry.keywords || ""}`.toLowerCase().includes(term));
-      const nodes = filtered.map((entry) => {
-        const card = el("article", "asset-item"); card.dataset.libraryKey = entry.key;
+    function hydrateThumbnail(preview) {
+      const entry = pendingThumbnails.get(preview);
+      if (!entry || !preview.isConnected || !ui.elements.packLibrary.contains(preview)) return;
+      preview.replaceChildren(thumbnail(entry)); preview.dataset.artReady = "true";
+      pendingThumbnails.delete(preview); thumbnailObserver?.unobserve(preview);
+    }
+
+    function hydrateLibrary() {
+      if (!ui.elements.libraryPanel.classList.contains("is-open")) return;
+      thumbnailObserver?.disconnect();
+      for (const preview of pendingThumbnails.keys()) {
+        if (thumbnailObserver) thumbnailObserver.observe(preview);
+        else hydrateThumbnail(preview);
+      }
+    }
+
+    function libraryCard(entry) {
+      const signature = JSON.stringify([entry.type, entry.label, entry.description, entry.count, entry.unit, entry.kind, entry.canDelete]);
+      let cached = libraryCards.get(entry.key);
+      if (!cached || cached.signature !== signature) {
+        const card = el("article", `asset-item${entry.type === "set" ? " asset-item--set" : ""}`); card.dataset.libraryKey = entry.key;
         const preview = button("", "asset-preview"); preview.setAttribute("aria-label", `添加${entry.label}`); preview.dataset.addAsset = entry.key;
-        preview.replaceChildren(thumbnail(entry));
+        const placeholder = el("span", "asset-placeholder"); placeholder.setAttribute("aria-hidden", "true"); preview.replaceChildren(placeholder);
         preview.title = `${entry.label} · ${entry.description}`;
         const copy = el("div", "asset-copy"); copy.append(el("strong", "", entry.label));
-        if (entry.count !== undefined) copy.append(el("small", "", `${entry.count} ${entry.unit || "张"}${entry.type === "import" ? " · 导入" : ""}`));
+        if (entry.count !== undefined) copy.append(el("small", "", `${entry.count} ${entry.unit || "张"}${entry.set ? ` · ${entry.set.players}` : entry.type === "import" ? " · 导入" : ""}`));
         const add = button("", "asset-add", "plus"); add.dataset.addAsset = entry.key; add.setAttribute("aria-label", `添加${entry.label}`);
-        const disabled = !ui.app.connectionOpen || (entry.type === "import" && ui.app.state.you.role !== "host");
-        add.disabled = disabled; preview.disabled = disabled;
-        const favorite = button(favorites.has(entry.key) ? "★" : "☆", `asset-favorite${favorites.has(entry.key) ? " is-favorite" : ""}`);
-        favorite.dataset.favorite = entry.key; favorite.setAttribute("aria-label", `${favorites.has(entry.key) ? "取消收藏" : "收藏"}${entry.label}`);
-        favorite.setAttribute("aria-pressed", String(favorites.has(entry.key)));
+        const favorite = button("", "asset-favorite");
         if (entry.type === "saved" && entry.canDelete) {
-          delete favorite.dataset.favorite; favorite.dataset.removeTemplate = entry.id;
-          favorite.replaceChildren(icon("x")); favorite.removeAttribute("aria-pressed");
-          favorite.setAttribute("aria-label", `移除本桌收藏${entry.label}`); favorite.disabled = !ui.app.connectionOpen;
-        }
+          favorite.dataset.removeTemplate = entry.id; favorite.replaceChildren(icon("x"));
+          favorite.setAttribute("aria-label", `移除本桌收藏${entry.label}`);
+        } else favorite.dataset.favorite = entry.key;
         card.append(preview, favorite, copy, add);
+        if (entry.type === "set") {
+          const parts = button("查看单件", "asset-parts", "arrow-right"); parts.dataset.setParts = entry.id;
+          parts.setAttribute("aria-label", `查看${entry.label}单件`); card.append(parts);
+        }
         if (entry.type === "import") {
           const remove = button("", "asset-remove", "x"); remove.dataset.removePack = entry.localId;
           remove.setAttribute("aria-label", `从本机资源库移除${entry.label}`); remove.title = "从本机资源库移除";
           card.append(remove);
         }
-        return card;
-      });
+        cached = { signature, card, preview, add, favorite }; libraryCards.set(entry.key, cached);
+      }
+      const { card, preview, add, favorite } = cached;
+      add.disabled = preview.disabled = !ui.app.connectionOpen || (entry.type === "import" && ui.app.state.you.role !== "host");
+      if (favorite.dataset.removeTemplate) favorite.disabled = !ui.app.connectionOpen;
+      else {
+        const saved = favorites.has(entry.key), label = `${saved ? "取消收藏" : "收藏"}${entry.label}`;
+        if (favorite.getAttribute("aria-label") !== label) favorite.textContent = saved ? "★" : "☆";
+        favorite.setAttribute("aria-label", label); favorite.setAttribute("aria-pressed", String(saved)); favorite.classList.toggle("is-favorite", saved);
+      }
+      if (!preview.dataset.artReady) pendingThumbnails.set(preview, entry);
+      return card;
+    }
+
+    function renderLibrary(force = false) {
+      if (!ui.app.state) return;
+      const term = $("library-search").value.trim().toLowerCase();
+      const all = entries(), scope = root.ParlorEngine.BOARD_GAME_SETS.find((set) => set.id === gameScope);
+      const signature = JSON.stringify([category, term, gameScope, all.map(({ key, label, description, count, canDelete }) => [key, label, description, count, canDelete]), [...favorites], ui.app.connectionOpen, ui.app.state.you.id, ui.app.state.you.role]);
+      if (!force && signature === librarySignature) return;
+      librarySignature = signature;
+      const memberKeys = scope && new Set(scope.members.map((member) => member.resourceId));
+      const filtered = all.filter((entry) => (!memberKeys || memberKeys.has(entry.key))
+        && (category === "all" || (category === "favorites" ? favorites.has(entry.key) || entry.type === "saved" : entry.category === category))
+        && `${entry.id} ${entry.label} ${entry.description} ${entry.keywords || ""}`.toLowerCase().includes(term));
+      const keys = new Set(all.map((entry) => entry.key));
+      for (const key of libraryCards.keys()) if (!keys.has(key)) libraryCards.delete(key);
+      thumbnailObserver?.disconnect(); pendingThumbnails.clear();
+      const focused = ui.elements.packLibrary.contains(document.activeElement) ? document.activeElement : null;
+      const nodes = filtered.map(libraryCard);
       if (!nodes.length) {
-        const empty = el("div", "library-empty"); empty.append(icon("package"), el("strong", "", term ? "没找到这件物品" : "暂无收藏")); nodes.push(empty);
+        const empty = el("div", "library-empty"); empty.append(icon("package"), el("strong", "", term ? "没找到这件物品" : category === "favorites" ? "暂无收藏" : "这里还没有资源"));
+        empty.append(el("p", "", category === "favorites" && !term ? "点资源上的星号，留在这里。" : "换个关键词，或看看其他资源。"));
+        const reset = button("查看全部资源", "outline-button"); reset.dataset.resetLibrary = "true"; empty.append(reset); nodes.push(empty);
       }
       ui.elements.packLibrary.replaceChildren(...nodes);
+      if (focused?.isConnected && !focused.disabled) focused.focus({ preventScroll: true });
+      for (const item of $("library-tabs").children) { const active = item.dataset.category === category; item.classList.toggle("is-active", active); item.setAttribute("aria-pressed", String(active)); }
+      $("library-search-clear").classList.toggle("is-hidden", !$("library-search").value);
+      $("library-result-count").textContent = `${term ? "找到 " : ""}${filtered.length} 件资源`;
+      $("library-scope").classList.toggle("is-hidden", !scope);
+      if (scope) $("library-scope").replaceChildren(el("span", "", `${scope.label} · 单件`), icon("x"));
       renderPendingAssets();
+      hydrateLibrary();
       $("library-total").textContent = String(all.length);
       $("import-pack").disabled = !ui.app.connectionOpen || ui.app.state.you.role !== "host";
       $("import-pack").title = ui.app.state.you.role === "host" ? "导入 JSON 牌盒" : "由房主导入牌盒";
     }
 
+    function assetSize(entry) {
+      if (entry?.resource?.kind === "token") return { width: 62, height: 62 };
+      return { width: entry?.set?.width || entry?.resource?.width || 94, height: entry?.set?.height || entry?.resource?.height || 168 };
+    }
+
     function placement(entry) {
       const rect = ui.elements.viewport.getBoundingClientRect();
-      const libraryOpen = ui.elements.libraryPanel.classList.contains("is-open") && rect.width >= 760;
-      const left = libraryOpen ? Math.max(80, ui.elements.libraryPanel.getBoundingClientRect().right - rect.left + 24) : 80;
-      const point = ui.screenToWorld(rect.left + left + (rect.width - left - 150) / 2, rect.top + (rect.height - 60) / 2);
-      const size = entry?.set || entry?.resource || { width: 94, height: 138 };
-      return { x: point.x - (size.width || 94) / 2 + (spawnNumber % 4) * 32, y: point.y - (size.height || 138) / 2 + (Math.floor(spawnNumber / 4) % 3) * 24 };
+      const area = ui.cameraViewArea(rect), size = assetSize(entry);
+      const point = ui.screenToWorld(rect.left + area.x + area.width / 2, rect.top + area.y + area.height / 2);
+      return { x: point.x - size.width / 2 + (spawnNumber % 4) * 32, y: point.y - size.height / 2 + (Math.floor(spawnNumber / 4) % 3) * 24 };
+    }
+
+    function clearPlacement(entry, preferred, ownRequest) {
+      const state = ui.app.state, size = assetSize(entry), zone = state.room.geometry.publicZone, gap = 48;
+      const occupied = [...ui.app.handLayouts.values()];
+      for (const [type, values] of [["card", state.cards], ["deck", state.decks], ["token", state.tokens], ["object", state.objects]]) {
+        for (const value of values || []) if (type !== "card" || value.zone === "public") occupied.push(root.ParlorEngine.tableResourceBounds(type, value));
+      }
+      for (const request of pendingPlacements) if (request !== ownRequest && sameSpawnContext(request)) occupied.push(request.bounds);
+      const minimum = { x: zone.x + 18, y: zone.y + 28 }, maximum = { x: zone.x + zone.width - size.width - 18, y: zone.y + zone.height - size.height - 28 };
+      if (maximum.x < minimum.x || maximum.y < minimum.y) return null;
+      const clamp = (point) => ({ x: Math.max(minimum.x, Math.min(maximum.x, Math.round(point.x))), y: Math.max(minimum.y, Math.min(maximum.y, Math.round(point.y))) });
+      const collision = (point) => occupied.find((rect) => point.x < rect.x + rect.width + gap && point.x + size.width + gap > rect.x && point.y < rect.y + rect.height + gap && point.y + size.height + gap > rect.y);
+      const distance = (point) => (point.x - preferred.x) ** 2 + (point.y - preferred.y) ** 2;
+      const queue = [], seen = new Set();
+      const enqueue = (point) => {
+        const next = clamp(point), key = `${next.x},${next.y}`;
+        if (!seen.has(key)) { seen.add(key); queue.push(next); }
+      };
+      enqueue(preferred);
+      // Try nearby edges first; the bounded search keeps a crowded table responsive.
+      for (let attempts = 0; queue.length && attempts < 200; attempts++) {
+        queue.sort((a, b) => distance(a) - distance(b));
+        const point = queue.shift(), hit = collision(point);
+        if (!hit) return point;
+        enqueue({ x: Math.floor(hit.x - size.width - gap), y: point.y }); enqueue({ x: Math.ceil(hit.x + hit.width + gap), y: point.y });
+        enqueue({ x: point.x, y: Math.floor(hit.y - size.height - gap) }); enqueue({ x: point.x, y: Math.ceil(hit.y + hit.height + gap) });
+      }
+      if (!occupied.length) return clamp(preferred);
+      const outside = [
+        { x: Math.min(...occupied.map((rect) => rect.x)) - size.width - gap, y: preferred.y },
+        { x: Math.max(...occupied.map((rect) => rect.x + rect.width)) + gap, y: preferred.y },
+        { x: preferred.x, y: Math.min(...occupied.map((rect) => rect.y)) - size.height - gap },
+        { x: preferred.x, y: Math.max(...occupied.map((rect) => rect.y + rect.height)) + gap }
+      ].map(clamp).sort((a, b) => distance(a) - distance(b));
+      return outside.find((point) => !collision(point)) || null;
     }
 
     function renderPendingAssets() {
@@ -225,20 +325,30 @@
               if (!cancellationNotified) { ui.toast("未发送的资源取用已取消，请重新取用。"); cancellationNotified = true; }
               continue;
             }
+            if (request.autoPlace) {
+              const position = clearPlacement(request.entry, request.bounds, request);
+              if (!position) throw new Error("附近没有足够空位，可以把资源拖到你指定的位置。");
+              Object.assign(request.command, position); Object.assign(request.bounds, position);
+            }
             const receipt = await ui.sendCommand(request.command, { withReceipt: true });
             completed = Boolean(receipt);
             if (receipt && sameSpawnContext(request)) {
               const created = receipt.createdResource;
               const resources = { deck: ui.app.state.decks, object: ui.app.state.objects, token: ui.app.state.tokens }[created?.type];
-              const canSelect = request.intent === ui.app.selectionIntent && !ui.app.drag && !ui.app.pan && !ui.app.touchNavigation && !ui.app.handTouch;
+              const typing = document.activeElement?.matches("input, textarea, select, [contenteditable='true']") && document.activeElement !== $("library-search");
+              const canSelect = request.intent === ui.app.selectionIntent && !typing && !document.querySelector("dialog[open]") && !ui.app.drag && !ui.app.pan && !ui.app.marquee && !ui.app.touchNavigation && !ui.app.handTouch;
               if (canSelect && Array.isArray(resources) && resources.some((item) => item.id === created.id)) {
                 ui.selectResource(created.type, created.id, { preserveIntent: true });
-                if (innerWidth < 760 && ui.elements.libraryPanel.classList.contains("is-open")) ui.hideSidePanels({ returnFocus: false });
+                if (request.autoPlace && ui.app.cameraVersion === request.cameraVersion && ["x", "y", "scale"].every((key) => ui.app.camera[key] === request.camera[key])) {
+                  ui.hideLibrary({ returnFocus: false });
+                  ui.focusWorldBounds(request.bounds);
+                  ui.elements.objectsRoot.querySelector(`[data-object-id="${created.id}"]`)?.focus({ preventScroll: true });
+                } else if (innerWidth < 760 && ui.elements.libraryPanel.classList.contains("is-open")) ui.hideSidePanels({ returnFocus: false });
               }
-              ui.toast(`「${request.entry.label}」已放上桌`);
             }
           } catch (error) { handleError(error); }
           finally {
+            pendingPlacements.delete(request);
             const remaining = (pendingAssets.get(request.entry.key) || 1) - 1;
             if (remaining) pendingAssets.set(request.entry.key, remaining);
             else pendingAssets.delete(request.entry.key);
@@ -256,13 +366,17 @@
         : entry.type === "pack" ? { type: "add-pack", packId: entry.id }
         : entry.type === "import" ? { type: "import-pack", pack: entry.pack }
           : entry.type === "saved" ? { type: "spawn-template", templateId: entry.id } : { type: "spawn-resource", resourceId: entry.id };
-      const position = point || placement(entry);
+      const autoPlace = !point && (entry.type === "set" || entry.resource?.kind === "mat");
+      const position = point || (autoPlace ? clearPlacement(entry, placement(entry)) : placement(entry));
+      if (!position) { ui.toast("附近没有足够空位，可以把资源拖到你指定的位置。", "error"); return false; }
       spawnNumber++;
-      const request = { entry, command: { ...command, ...position }, playerId: ui.app.state.you.id, roomCode: ui.app.state.room.code, intent: ++ui.app.selectionIntent };
+      const request = { entry, command: { ...command, ...position }, bounds: { ...position, ...assetSize(entry) }, autoPlace, camera: { ...ui.app.camera }, cameraVersion: ui.app.cameraVersion,
+        playerId: ui.app.state.you.id, roomCode: ui.app.state.room.code, intent: ++ui.app.selectionIntent };
+      pendingPlacements.add(request);
       pendingAssets.set(entry.key, (pendingAssets.get(entry.key) || 0) + 1);
       renderPendingAssets();
       return new Promise((resolve) => {
-        spawnQueue.push({ ...request, resolve });
+        request.resolve = resolve; spawnQueue.push(request);
         void drainSpawns();
       });
     }
@@ -323,8 +437,13 @@
       const home = button("主桌", "location-item", "cards-three"); home.addEventListener("click", () => { ui.fitCamera(); if (innerWidth < 760) closePanel(); });
       const nodes = [home, ...mats.map((mat) => {
         const node = button(mat.label, "location-item", "stack");
-        node.append(el("small", "", mat.pattern === "checker" ? "方格棋盘" : "自由区域"));
-        node.addEventListener("click", () => { ui.focusWorldPoint({ x: mat.x + mat.width / 2, y: mat.y + mat.height / 2 }); if (innerWidth < 760) closePanel(); }); return node;
+        const game = root.ParlorEngine.BOARD_GAME_SETS.find((set) => set.id === mat.pattern);
+        node.append(el("small", "", game ? `${game.players} · 自由棋盘` : mat.pattern === "checker" ? "方格棋盘" : "自由区域"));
+        node.addEventListener("click", () => {
+          ui.app.selectionIntent++;
+          if (innerWidth < 760) closePanel();
+          ui.focusWorldBounds(root.ParlorEngine.tableResourceBounds("object", mat));
+        }); return node;
       })];
       $("world-locations").replaceChildren(...nodes);
     }
@@ -615,15 +734,33 @@
       surface.append(die, note);
     }
 
-    $("library-search").addEventListener("input", () => { ui.app.selectionIntent++; renderLibrary(); });
+    function browseLibrary(nextCategory = "all", nextScope = null, { clearSearch = false } = {}) {
+      category = nextCategory; gameScope = nextScope;
+      if (clearSearch) $("library-search").value = "";
+      ui.app.selectionIntent++; libraryBody.scrollTop = 0; renderLibrary();
+    }
+    $("library-search").addEventListener("input", () => { ui.app.selectionIntent++; libraryBody.scrollTop = 0; renderLibrary(); });
+    $("library-search-clear").addEventListener("click", () => { browseLibrary(category, gameScope, { clearSearch: true }); $("library-search").focus(); });
+    $("library-scope").addEventListener("click", () => { browseLibrary("all", null, { clearSearch: true }); $("library-search").focus(); });
     $("library-tabs").addEventListener("click", (event) => {
-      const selected = event.target.closest("[data-category]"); if (!selected) return; category = selected.dataset.category;
-      ui.app.selectionIntent++;
-      for (const item of $("library-tabs").children) { item.classList.toggle("is-active", item === selected); item.setAttribute("aria-pressed", String(item === selected)); }
-      renderLibrary();
+      const selected = event.target.closest("[data-category]"); if (selected) browseLibrary(selected.dataset.category);
+    });
+    $("library-tabs").addEventListener("keydown", (event) => {
+      const tabs = [...$("library-tabs").children], index = tabs.indexOf(event.target);
+      if (index < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault(); event.stopPropagation();
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      browseLibrary(tabs[next].dataset.category); tabs[next].focus();
+    });
+    ui.elements.packLibrary.addEventListener("focusin", (event) => {
+      const preview = event.target.closest(".asset-preview");
+      if (preview && ui.elements.libraryPanel.classList.contains("is-open")) hydrateThumbnail(preview);
     });
     ui.elements.packLibrary.addEventListener("click", (event) => {
       if (Date.now() - lastDragAt < 250) return;
+      const parts = event.target.closest("[data-set-parts]");
+      if (parts) { browseLibrary("all", parts.dataset.setParts, { clearSearch: true }); $("library-scope").focus(); return; }
+      if (event.target.closest("[data-reset-library]")) { browseLibrary("all", null, { clearSearch: true }); $("library-search").focus(); return; }
       const remove = event.target.closest("[data-remove-template]");
       if (remove && !remove.disabled) { void ui.sendCommand({ type: "delete-template", templateId: remove.dataset.removeTemplate }); return; }
       const removePack = event.target.closest("[data-remove-pack]");
@@ -827,7 +964,7 @@
       return false;
     }
     renderWelcome();
-    return { render, renderLibrary, renderObjects, renderSaveStatus, renderChatControls, drawMap, makeObjectNode, extraActions, handleAction, editObject, keydown, closePanel, showPanel, showChat, hideMinimap, cancelLibraryDrag, kindNames };
+    return { render, renderLibrary, hydrateLibrary, renderObjects, renderSaveStatus, renderChatControls, drawMap, makeObjectNode, extraActions, handleAction, editObject, keydown, closePanel, showPanel, showChat, hideMinimap, cancelLibraryDrag, kindNames };
   }
   root.ParlorWorkspace = Object.freeze({ create });
 })(globalThis);

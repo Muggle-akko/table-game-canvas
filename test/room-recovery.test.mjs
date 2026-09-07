@@ -49,6 +49,7 @@ async function subscribe(baseUrl, room, session) {
   const response = await fetch(`${baseUrl}/api/events?room=${room.code}&session=${session}`, { signal: controller.signal });
   assert.equal(response.status, 200);
   const reader = response.body.getReader();
+  const decoder = new TextDecoder();
   let text = "";
   return {
     async until(predicate) {
@@ -64,7 +65,7 @@ async function subscribe(baseUrl, room, session) {
           }
           const chunk = await reader.read();
           if (chunk.done) throw new Error("Event stream ended before the expected state");
-          text += new TextDecoder().decode(chunk.value);
+          text += decoder.decode(chunk.value, { stream: true });
         }
       } finally { clearTimeout(timer); }
     },
@@ -128,4 +129,58 @@ test("real HTTP/SSE: lost receipts and process restart preserve a single draw, p
   const stale = structuredClone(body); stale.message.id = "stale-command-001";
   assert.equal((await request("/api/message", stale)).payload.code, "GAME_CHANGED");
   assert.equal(room.deckOrder.length, 53);
+});
+
+test("real HTTP/SSE: four board sets, bulk movement and chat coexist with private cards on both seats", { timeout: 15000, skip: process.env.PARLOR_HTTP_TESTS !== "1" && "Run npm run test:network with permission to listen on loopback" }, async (t) => {
+  const room = setupRoom(), server = await createRoomServer(room, 0, { packLibrary: [{ pack }] });
+  const baseUrl = `http://127.0.0.1:${server.httpServer.address().port}`, streams = [];
+  t.after(async () => { await Promise.all(streams.map((stream) => stream.close())); await server.close(); });
+  const request = async (path, body) => {
+    const response = await fetch(`${baseUrl}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal(response.status, 200); return response.json();
+  };
+  const host = await request("/api/join", { roomCode: room.code, hostSecret: room.hostSecret });
+  const guest = await request("/api/join", { roomCode: room.code, displayName: "棋类验收" });
+  const hostStream = await subscribe(baseUrl, room, host.sessionToken), guestStream = await subscribe(baseUrl, room, guest.sessionToken);
+  streams.push(hostStream, guestStream);
+  let serial = 0;
+  const send = async (command, seat = guest) => {
+    const body = { roomCode: room.code, sessionToken: seat.sessionToken, message: { type: "command", id: `board-http-${++serial}`, gameId: room.gameId, epoch: room.epoch, baseRevision: room.revision, command } };
+    return { receipt: await request("/api/message", body), body };
+  };
+  await send({ type: "draw" });
+  let expectedTokens = 0;
+  const snapshots = [];
+  for (const [index, setId] of ["chess", "xiangqi", "jungle", "aeroplane"].entries()) {
+    const x = index % 2 ? 1700 : -2400, y = index < 2 ? -1600 : 1100;
+    const { receipt, body } = await send({ type: "spawn-set", setId, x, y });
+    expectedTokens += index < 2 ? 32 : 16;
+    assert.equal(receipt.createdResource.type, "object");
+    const duplicate = await request("/api/message", body); assert.equal(duplicate.duplicate, true);
+    const hostState = await hostStream.until((state) => state.type === "room-state" && state.tokens.length === expectedTokens);
+    const guestState = await guestStream.until((state) => state.type === "room-state" && state.tokens.length === expectedTokens);
+    assert.deepEqual(hostState.tokens, guestState.tokens);
+    assert.deepEqual(hostState.objects, guestState.objects);
+    assert.equal(hostState.objects.find((object) => object.resourceId === `board-${setId}`).id, receipt.createdResource.id);
+    const hand = guestState.cards.find((card) => card.ownerId === guest.player.id && card.zone === "hand");
+    assert.ok(hand.face); assert.equal(hostState.cards.find((card) => card.id === hand.id).face, null);
+    snapshots.push(guestState);
+  }
+  assert.equal(room.tokens.size, 96); assert.equal(room.objects.size, 9);
+  const selected = snapshots.at(-1).tokens.slice(0, 2), revision = room.revision;
+  await send({ type: "move-resources", resources: selected.map(({ id, x, y }) => ({ type: "token", id, x, y })), dx: 120, dy: 80 });
+  for (const stream of [hostStream, guestStream]) {
+    const state = await stream.until((state) => state.type === "room-state" && state.revision > revision);
+    for (const token of selected) {
+      const next = state.tokens.find((item) => item.id === token.id);
+      assert.equal(next.x, token.x + 120); assert.equal(next.y, token.y + 80); assert.deepEqual(next.piece, token.piece);
+    }
+  }
+  await send({ type: "chat", text: "桌面整理好了" });
+  for (const stream of [hostStream, guestStream]) {
+    const state = await stream.until((state) => state.type === "room-state" && state.messages.at(-1)?.text === "桌面整理好了");
+    assert.deepEqual(state.turn, snapshots.at(-1).turn, "players retain control of the turn marker");
+  }
+  await send({ type: "undo" }, host);
+  assert.equal(room.tokens.get(selected[0].id).x, selected[0].x, "chat does not consume the group's undo step");
 });

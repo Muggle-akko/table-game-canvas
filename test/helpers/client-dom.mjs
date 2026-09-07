@@ -4,7 +4,7 @@ import vm from "node:vm";
 
 // An in-memory DOM double for production event wiring. It has no layout engine,
 // networking, or browser process; these tests do not replace visual browser QA.
-export async function loadClient({ width = 1440, height = 900, indexedDB, storage = new Map(), url = "https://table.example/?preview=1", fetch: fetchImpl, EventSource } = {}) {
+export async function loadClient({ width = 1440, height = 900, indexedDB, storage = new Map(), url = "https://table.example/?preview=1", fetch: fetchImpl, EventSource, IntersectionObserver } = {}) {
   let document, context;
   const listeners = new Map();
   let timerId = 0, timerClock = 0;
@@ -155,7 +155,7 @@ export async function loadClient({ width = 1440, height = 900, indexedDB, storag
   const storageApi = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) };
   const location = new URL(url); location.assign = (value) => { location.href = value; };
   const globals = {
-    document, URL, URLSearchParams, Blob, AbortController, EventSource, crypto: webcrypto, structuredClone, console, indexedDB,
+    document, URL, URLSearchParams, Blob, AbortController, EventSource, IntersectionObserver, crypto: webcrypto, structuredClone, console, indexedDB,
     HTMLElement: Element, HTMLInputElement: Input, HTMLTextAreaElement: Textarea, HTMLSelectElement: Select,
     innerWidth: width, innerHeight: height, location, localStorage: storageApi, sessionStorage: storageApi,
     performance,

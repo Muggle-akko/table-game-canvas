@@ -324,7 +324,11 @@ function showLibrary() {
   elements.toolsBackdrop.classList.toggle("is-hidden", window.innerWidth >= 760);
   elements.room.classList.add("has-library");
   elements.openLibrary.setAttribute("aria-expanded", "true");
-  window.setTimeout(() => elements.closeLibrary.focus(), 40);
+  workspace?.hydrateLibrary();
+  const intent = app.selectionIntent, focused = document.activeElement;
+  window.setTimeout(() => {
+    if (elements.libraryPanel.classList.contains("is-open") && app.selectionIntent === intent && document.activeElement === focused) elements.closeLibrary.focus();
+  }, 40);
 }
 
 function hideLibrary({ returnFocus = true } = {}) {
@@ -1285,7 +1289,10 @@ function renderSelectionDock() {
     elements.selectionMeta.textContent = locked ? "含锁定物件 · Shift 点击可移出多选" : pending ? "正在确认落点…" : "Shift 点选增减 · Esc 取消";
     const hint = document.createElement("span"); hint.className = "selection-hint";
     hint.textContent = locked ? "先解锁或移出锁定物件" : "拖动任一选中物件，一起移动";
-    elements.selectionActions.replaceChildren(hint);
+    const focused = elements.selectionActions.contains(document.activeElement) && document.activeElement.dataset.selectionAction;
+    const focus = makeSelectionAction("focus-selection", "corners-out", "聚焦所选", { disabled: pending });
+    elements.selectionActions.replaceChildren(focus, hint);
+    if (focused === "focus-selection") focus.focus({ preventScroll: true });
     elements.selectionTransfer.classList.add("is-hidden");
     syncSelectionClasses();
     return;
@@ -1331,6 +1338,7 @@ function renderSelectionDock() {
     const object = resource.value;
     elements.selectionMeta.textContent = object.locked ? "已锁定" : object.kind === "bag" ? `${object.count} 件` : "";
     elements.selectionTitle.textContent = object.label;
+    if (object.kind === "mat") actions.push(makeSelectionAction("focus-selection", "corners-out", ["plain", "poker"].includes(object.pattern) ? "聚焦桌垫" : "聚焦棋盘", { accent: true }));
     if (object.kind === "die") actions.push(makeSelectionAction("roll-object", "dice-six", "掷一次", { accent: true, disabled: !connected }));
     if (object.kind === "counter") {
       actions.push(makeSelectionAction("counter-minus", "minus", "减一", { disabled: !connected }));
@@ -1397,6 +1405,7 @@ function renderSelectionDock() {
 }
 
 function runSelectionAction(action) {
+  if (action === "focus-selection") { focusSelection(); return; }
   const resource = selectedResource();
   if (!resource || !app.state || resourceDropPending(resource.type, resource.value.id)) return;
   if (action === "signal-card") { void feedback.requestCard(resource.value); return; }
@@ -2141,6 +2150,8 @@ function applyCamera() {
   const rect = elements.viewport.getBoundingClientRect();
   if (rect.width > 0 && rect.height > 0) app.cameraViewport = { width: rect.width, height: rect.height };
   const { x, y, scale } = app.camera;
+  if (!app.appliedCamera || ["x", "y", "scale"].some((key) => app.appliedCamera[key] !== app.camera[key])) app.cameraVersion = (app.cameraVersion || 0) + 1;
+  app.appliedCamera = { x, y, scale };
   elements.world.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
   $("#zoom-value").textContent = `${Math.round(scale * 100)}%`;
   elements.viewport.style.setProperty("--grid-size", `${48 * scale}px`);
@@ -2183,6 +2194,49 @@ function cameraLeftInset(rect) {
   return rect.width < 760 ? 56 : 72;
 }
 
+function cameraViewArea(rect = elements.viewport.getBoundingClientRect()) {
+  let left = cameraLeftInset(rect), right = 36, top = 32, bottom = 104;
+  if (rect.width >= 760) {
+    for (const panel of elements.room.querySelectorAll(".side-panel.is-open, .history-panel.is-open, .aux-panel.is-open")) {
+      const bounds = panel.getBoundingClientRect();
+      if (bounds.left + bounds.width / 2 < rect.left + rect.width / 2) left = Math.max(left, bounds.right - rect.left + 20);
+      else right = Math.max(right, rect.right - bounds.left + 20);
+    }
+  }
+  for (const panel of [elements.selectionDock, elements.handDrawer]) {
+    if (!panel || panel.classList.contains("is-hidden")) continue;
+    const bounds = panel.getBoundingClientRect();
+    if (bounds.top >= rect.top && bounds.top < rect.bottom) bottom = Math.max(bottom, rect.bottom - bounds.top + 24);
+  }
+  left = Math.min(left, Math.max(0, rect.width - right - 120));
+  return { x: left, y: top, width: Math.max(120, rect.width - left - right), height: Math.max(100, rect.height - top - bottom) };
+}
+
+function unionBounds(bounds) {
+  if (!bounds.length) return null;
+  const x = Math.min(...bounds.map((item) => item.x)), y = Math.min(...bounds.map((item) => item.y));
+  return { x, y, width: Math.max(...bounds.map((item) => item.x + item.width)) - x, height: Math.max(...bounds.map((item) => item.y + item.height)) - y };
+}
+
+function focusWorldBounds(bounds, { maxScale = 1.1, padding = 40 } = {}) {
+  if (!bounds) return;
+  const rect = elements.viewport.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const area = cameraViewArea(rect);
+  const scale = Math.max(.015, Math.min(maxScale, area.width / (bounds.width + padding * 2), area.height / (bounds.height + padding * 2)));
+  app.camera = { scale, x: area.x + area.width / 2 - (bounds.x + bounds.width / 2) * scale, y: area.y + area.height / 2 - (bounds.y + bounds.height / 2) * scale };
+  app.cameraTouched = true; app.cameraInitialized = true; applyCamera();
+}
+
+function focusSelection() {
+  if (!app.state || app.drag || app.pan || app.marquee || app.touchNavigation || app.handTouch) return;
+  const resources = selectionReferences().map(tableResource).filter(Boolean);
+  if (resources.some(({ type, value }) => resourceDropPending(type, value.id))) return;
+  const bounds = resources.map(({ type, value }) => window.ParlorEngine.tableResourceBounds(type, value));
+  app.selectionIntent++;
+  focusWorldBounds(unionBounds(bounds));
+}
+
 function fitCamera() {
   const rect = elements.viewport.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
@@ -2206,23 +2260,16 @@ function fitCamera() {
 
 function fitAll() {
   if (!app.state) return;
-  const items = [
-    ...(app.state.decks || []).map((item) => ({ ...item, width: 94, height: 168 })),
-    ...app.state.cards.filter((item) => item.zone === "public").map((item) => ({ ...item, width: 94, height: 138 })),
-    ...(app.state.tokens || []).map((item) => ({ ...item, width: 62, height: 62 })),
-    ...(app.state.objects || []), ...app.handLayouts.values()
-  ];
-  const home = app.state.room.geometry.homeZone;
-  const minX = Math.min(home.x, ...items.map((item) => item.x)) - 80;
-  const minY = Math.min(home.y, ...items.map((item) => item.y)) - 80;
-  const maxX = Math.max(home.x + home.width, ...items.map((item) => item.x + item.width)) + 80;
-  const maxY = Math.max(home.y + home.height, ...items.map((item) => item.y + item.height)) + 80;
-  const rect = elements.viewport.getBoundingClientRect();
-  const left = cameraLeftInset(rect);
-  const width = rect.width - left - 36, height = rect.height - 100;
-  const scale = Math.max(0.015, Math.min(0.9, width / (maxX - minX), height / (maxY - minY)));
-  app.camera = { scale, x: left + width / 2 - (minX + maxX) / 2 * scale, y: 20 + height / 2 - (minY + maxY) / 2 * scale };
-  app.cameraTouched = true; app.cameraInitialized = true; applyCamera();
+  app.selectionIntent++;
+  const bounds = [app.state.room.geometry.homeZone, ...app.handLayouts.values()];
+  for (const [type, values] of [["card", app.state.cards], ["deck", app.state.decks], ["token", app.state.tokens], ["object", app.state.objects]]) {
+    for (const value of values || []) if (type !== "card" || value.zone === "public") {
+      const rect = window.ParlorEngine.tableResourceBounds(type, value);
+      if (type === "deck") rect.height += 30;
+      bounds.push(rect);
+    }
+  }
+  focusWorldBounds(unionBounds(bounds), { maxScale: .9, padding: 80 });
 }
 
 function viewportPoint(clientX, clientY) {
@@ -3452,6 +3499,7 @@ elements.objectsRoot.addEventListener("pointerdown", (event) => {
   if (event.button !== 0 || (!event.shiftKey && event.target.closest("button"))) return;
   const node = event.target.closest(".world-object[data-object-id]");
   const object = app.state?.objects?.find((item) => item.id === node?.dataset.objectId);
+  if (object?.kind === "mat" && !event.target.closest("[data-mat-handle]")) return;
   if (object) startDrag(event, "object", object);
 });
 elements.objectsRoot.addEventListener("click", (event) => {
@@ -3467,6 +3515,7 @@ elements.objectsRoot.addEventListener("dblclick", (event) => {
   const node = event.target.closest(".world-object[data-object-id]");
   const object = app.state?.objects?.find((item) => item.id === node?.dataset.objectId);
   if (!object) return;
+  if (object.kind === "mat" && !event.target.closest("[data-mat-handle]")) return;
   selectResource("object", object.id);
   workspace.handleAction(object.kind === "die" ? "roll-object" : object.kind === "bag" ? "bag-draw" : "edit-object", selectedResource());
 });
@@ -3512,9 +3561,14 @@ for (const surface of [elements.cardsRoot, elements.handCards, elements.tokenRoo
   });
 }
 
+function pointerResource(target) {
+  const node = target.closest(".playing-card, .deck-stack, .table-token, .world-object");
+  return node?.classList.contains("object-mat") && !target.closest("[data-mat-handle]") ? null : node;
+}
+
 elements.viewport.addEventListener("dblclick", (event) => {
   if (ignoreTableActivation(event) || event.shiftKey) return;
-  if (app.drag || app.pan || app.marquee || event.target.closest(".playing-card, .deck-stack, .table-token, .world-object")) return;
+  if (app.drag || app.pan || app.marquee || pointerResource(event.target)) return;
   event.preventDefault();
   void pingAt(screenToWorld(event.clientX, event.clientY));
 });
@@ -3529,7 +3583,7 @@ elements.viewport.addEventListener("pointerdown", (event) => {
       return;
     }
   }
-  if (app.drag || app.pan || app.marquee || event.target.closest(".playing-card, .deck-stack, .table-token, .world-object")) return;
+  if (app.drag || app.pan || app.marquee || pointerResource(event.target)) return;
   if (event.pointerType !== "touch" && event.shiftKey) { beginMarquee(event); return; }
   clearSelection();
   app.pan = {
@@ -3741,7 +3795,8 @@ document.addEventListener("keydown", (event) => {
     }
   } else if (key === "f") {
     event.preventDefault();
-    fitAll();
+    if (event.shiftKey) focusSelection();
+    else fitAll();
   } else if (key === "h") {
     event.preventDefault();
     setFocusMode(!app.focusMode);
@@ -3836,9 +3891,9 @@ if (previewMode) previewRecovery = window.ParlorPreviewRecovery.create({
 });
 workspace = window.ParlorWorkspace.create({
   app, elements, previewMode, toast, sendCommand, screenToWorld,
-  fitCamera, fitAll, focusWorldPoint, applyCamera, makeCardNode, appendLockIndicator,
+  fitCamera, fitAll, focusWorldPoint, focusWorldBounds, cameraViewArea, applyCamera, makeCardNode, appendLockIndicator,
   makeSelectionAction, selectedResource, selectResource, clearSelection,
-  showLibrary, toggleLibrary, hideSidePanels, cancelHandInteraction,
+  showLibrary, hideLibrary, toggleLibrary, hideSidePanels, cancelHandInteraction,
   copyText, personalLink: () => recovery.personalLink(),
   restartPreview, openSavedPreview, retryPreviewSave: () => previewRecovery?.flush(),
   fetchSeat: async (playerId) => {
