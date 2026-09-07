@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { buildClientShell } from "../src/client-assets.mjs";
 import { serveStatic } from "../src/server.mjs";
 
 class MockResponse {
@@ -48,7 +49,7 @@ test("entry pages reference current client assets and runtime files require cach
   await serveStatic(response, "/");
   const html = response.body.toString("utf8");
   const assets = [...html.matchAll(/(?:src|href)="(\.\/[^\"]+\.(?:js|css)\?v=[a-f0-9]{16})"/g)].map((match) => match[1]);
-  assert.equal(assets.length, 12);
+  assert.equal(assets.length, 13);
   assert.equal(response.headers["Cache-Control"], "no-cache");
   for (const asset of assets) {
     const file = new MockResponse();
@@ -56,4 +57,18 @@ test("entry pages reference current client assets and runtime files require cach
     assert.equal(file.statusCode, 200, `${asset} should be served`);
     assert.equal(file.headers["Cache-Control"], "no-cache");
   }
+});
+
+test("the room serves the same versioned offline shell as a static deployment", async () => {
+  const shell = await buildClientShell(new URL("../public/", import.meta.url).pathname);
+  const entry = new MockResponse();
+  await serveStatic(entry, "/");
+  assert.equal(entry.body.toString("utf8"), shell.html);
+  const worker = new MockResponse();
+  await serveStatic(worker, "/service-worker.js");
+  assert.equal(worker.statusCode, 200);
+  assert.equal(worker.headers["Cache-Control"], "no-cache");
+  assert.match(worker.headers["Content-Type"], /javascript/);
+  assert.equal(worker.body.toString("utf8"), shell.worker);
+  assert.doesNotMatch(shell.worker, /PARLOR_SHELL_MANIFEST/);
 });

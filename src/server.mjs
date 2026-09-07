@@ -9,7 +9,7 @@ import { loadRoomAsset, validatePackAssets } from "./room-assets.mjs";
 import { createRoomTransport } from "./room-transport.mjs";
 import { createRoomPersistence, latestRoomPath, readRoomCheckpoint } from "./room-persistence.mjs";
 import { findCloudflared, startQuickTunnel } from "./tunnel.mjs";
-import { versionClientHtml } from "./client-assets.mjs";
+import { buildClientShell, versionClientHtml } from "./client-assets.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const root = resolve(dirname(modulePath), "..");
@@ -145,6 +145,7 @@ export async function serveStatic(response, pathname) {
     const extension = extname(absolutePath);
     let bytes = await readFile(absolutePath);
     if (extension === ".html") bytes = Buffer.from(await versionClientHtml(bytes.toString("utf8"), publicDirectory));
+    if (relativePath === "service-worker.js") bytes = Buffer.from((await buildClientShell(publicDirectory)).worker);
     response.writeHead(200, {
       "Content-Type": MIME_TYPES[extension] || "application/octet-stream",
       "Cache-Control": [".html", ".js", ".css"].includes(extension) ? "no-cache" : "public, max-age=300",
