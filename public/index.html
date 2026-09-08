@@ -20,6 +20,7 @@
     <script defer src="./board-art.js"></script>
     <script defer src="./workspace-ui.js"></script>
     <script defer src="./room-feedback.js"></script>
+    <script defer src="./deal-ui.js"></script>
     <script defer src="./app.js"></script>
     <script defer src="./offline-client.js"></script>
   </head>
@@ -236,8 +237,9 @@
 
         <section class="panel-section control-section">
           <div class="section-heading"><h2>牌桌</h2></div>
-          <div class="tool-grid tool-grid--compact">
+          <div class="tool-grid tool-grid--compact tool-grid--deal">
             <button id="draw-card" class="tool-button" type="button"><i data-ph="cards-three"></i><strong>抽牌</strong></button>
+            <button id="deal-cards" class="tool-button" type="button" aria-haspopup="dialog" aria-controls="deal-dialog"><i data-ph="users-three"></i><strong>指定发牌</strong></button>
             <button id="shuffle-deck" class="tool-button" type="button"><i data-ph="shuffle"></i><strong>洗中央牌堆</strong></button>
             <button id="undo-table" class="tool-button host-tool" type="button"><i data-ph="arrow-counter-clockwise"></i><strong>撤销</strong></button>
           </div>
@@ -246,12 +248,6 @@
         <details class="tool-disclosure host-tool">
           <summary><strong>开局与整理</strong><span>房主</span></summary>
           <div class="tool-disclosure__body">
-            <div class="deal-station">
-              <strong>发牌</strong>
-              <label for="deal-count">每人</label>
-              <select id="deal-count" aria-label="每人发牌张数"></select>
-              <button id="deal-cards" type="button">发牌</button>
-            </div>
             <div class="tool-grid tool-grid--compact">
               <button id="tidy-public" class="tool-button" type="button"><i data-ph="stack"></i><strong>整理散牌</strong></button>
               <button id="collect-public" class="tool-button" type="button"><i data-ph="arrow-line-down"></i><strong>公共牌收回</strong></button>
@@ -372,6 +368,25 @@
 
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
     <div id="room-notices" class="room-notices" aria-live="polite" aria-relevant="additions" aria-label="同桌动态"></div>
+    <dialog id="deal-dialog" class="workspace-dialog deal-dialog" aria-labelledby="deal-title" aria-describedby="deal-source">
+      <form id="deal-form" novalidate>
+        <header class="deal-header"><div><h2 id="deal-title">发牌</h2><p id="deal-source"></p></div><button type="button" data-deal-close aria-label="关闭发牌面板"><i data-ph="x"></i></button></header>
+        <div class="deal-body">
+          <fieldset class="deal-section"><legend>发给谁</legend><div class="deal-recipient-tools"><span id="deal-recipient-count"></span><div><button type="button" data-deal-select="all">全选</button><button type="button" data-deal-select="online">仅在线</button><button type="button" data-deal-select="none">清空</button></div></div><div id="deal-recipients" class="deal-recipients"></div></fieldset>
+          <fieldset class="deal-section"><legend>怎么分</legend>
+            <div class="deal-modes" role="group" aria-label="分配方式"><button type="button" data-deal-mode="count" aria-pressed="true">每人定量</button><button type="button" data-deal-mode="equal" aria-pressed="false">平均分配</button></div>
+            <div id="deal-quantity" class="deal-quantity"><label for="deal-count">每人</label><div class="deal-stepper"><button type="button" data-deal-step="-1" aria-label="每人少发一张"><i data-ph="minus"></i></button><input id="deal-count" type="number" min="1" step="1" inputmode="numeric" aria-label="每人发牌张数" /><button type="button" data-deal-step="1" aria-label="每人多发一张"><i data-ph="plus"></i></button></div><span>张</span><div class="deal-presets" role="group" aria-label="常用张数"><button type="button" data-deal-count="2">2</button><button type="button" data-deal-count="5">5</button><button type="button" data-deal-count="7">7</button></div></div>
+            <label id="deal-remainder-row" class="deal-check is-hidden"><input id="deal-remainder" type="checkbox" /><span>余牌也随机分给所选玩家<small>不足整分时，随机几个人多拿一张</small></span></label>
+          </fieldset>
+          <label class="deal-check deal-random"><input id="deal-random" type="checkbox" checked /><span>随机抽牌<small>关闭后从牌堆顶部依次发，余牌保持原顺序</small></span></label>
+        </div>
+        <footer class="deal-footer">
+          <div id="deal-summary" class="deal-summary" aria-live="polite" aria-atomic="true"><div><span>每人</span><strong id="deal-each">—</strong></div><div><span>共发出</span><strong id="deal-total">—</strong></div><div><span>牌堆剩余</span><strong id="deal-remaining">—</strong></div></div>
+          <p id="deal-status" class="deal-status" role="status"></p><p class="deal-privacy">发入各自手牌，仅本人可见</p>
+          <div class="deal-footer-actions"><button id="deal-cancel" type="button" data-deal-close>取消</button><button id="deal-submit" class="primary-button" type="submit" disabled>发牌</button></div>
+        </footer>
+      </form>
+    </dialog>
     <dialog id="nickname-editor" class="workspace-dialog"><form id="nickname-form"><header><h2>修改昵称</h2><button type="button" data-close-dialog aria-label="关闭昵称编辑"><i data-ph="x"></i></button></header><label for="nickname-input">昵称</label><input id="nickname-input" maxlength="20" required autocomplete="nickname" /><button id="nickname-save" class="primary-button" type="submit">保存昵称</button></form></dialog>
     <input id="pack-file" type="file" accept=".json,application/json" hidden />
     <input id="scene-file" type="file" accept=".json,application/json" hidden />

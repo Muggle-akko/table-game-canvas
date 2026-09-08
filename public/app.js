@@ -79,7 +79,6 @@ const elements = {
   turnIndicator: $("#turn-indicator"),
   undoTable: $("#undo-table"),
   drawCard: $("#draw-card"),
-  dealCount: $("#deal-count"),
   dealCards: $("#deal-cards"),
   shuffleDeck: $("#shuffle-deck"),
   tidyPublic: $("#tidy-public"),
@@ -189,6 +188,7 @@ const app = {
 
 let workspace;
 let feedback;
+let dealer;
 let recovery;
 let previewRecovery;
 let stackState = null;
@@ -1198,7 +1198,7 @@ function clearSelection({ preserveIntent = false } = {}) {
   elements.selectionDock.classList.add("is-hidden");
   elements.selectionTransfer.classList.add("is-hidden");
   syncSelectionClasses();
-  if (app.state) { renderDealOptions(); renderTools(); }
+  if (app.state) renderTools();
 }
 
 function selectResource(type, id = "", { preserveIntent = false } = {}) {
@@ -1206,7 +1206,7 @@ function selectResource(type, id = "", { preserveIntent = false } = {}) {
   workspace?.hideMinimap();
   app.selection = { type, id: type === "deck" ? id || "main" : id };
   app.selectionTransferOpen = false;
-  if (app.state) { renderDealOptions(); renderTools(); }
+  if (app.state) renderTools();
   syncSelectionClasses();
 }
 
@@ -1221,6 +1221,7 @@ function makeSelectionAction(action, iconName, label, { accent = false, disabled
   const text = document.createElement("b");
   text.textContent = label;
   button.append(icon, text);
+  if (action === "deal-cards") { button.setAttribute("aria-haspopup", "dialog"); button.setAttribute("aria-controls", "deal-dialog"); }
   return button;
 }
 
@@ -1298,6 +1299,7 @@ function renderGroupSelectionDock() {
     if (cardsOnly) add(actions, "group-shuffle", "shuffle", "洗牌", cannotMove || count < 2, "把选中的牌合成一叠后洗牌，保留每张牌的正反面");
     add(actions, tokensOnly ? "group-spread-grid" : "group-spread-row", "arrows-out-line-horizontal", tokensOnly ? "展开" : "横向展开", cannotMove || count < 2);
     if (cardsOnly) {
+      add(secondary, "deal-cards", "users-three", "发牌", busy || resources.some(({ type, value }) => type === "card" && value.locked) || !count || app.pendingCommands.has("deal-resources"));
       add(secondary, "group-face-up", "eye", "全部正面", busy || !count);
       add(secondary, "group-face-down", "eye-slash", "全部背面", busy || !count);
     }
@@ -1380,6 +1382,7 @@ function renderSelectionDock() {
     elements.selectionMeta.textContent = `${resource.value.count} 张`;
     elements.selectionTitle.textContent = resource.value.label;
     actions.push(makeSelectionAction("draw", "cards-three", "抽一张", { accent: true, disabled: !connected || !resource.value.canDraw }));
+    actions.push(makeSelectionAction("deal-cards", "users-three", "发牌", { disabled: !connected || !resource.value.canDraw || app.pendingCommands.has("deal-resources") }));
     actions.push(makeSelectionAction("draw-public", "arrow-line-down", "取到桌上", { disabled: !connected || !resource.value.canDraw }));
     actions.push(makeSelectionAction("shuffle-deck", "shuffle", "洗牌", { disabled: !connected || resource.value.count < 2 }));
     actions.push(makeSelectionAction("spread-deck", "arrows-out-line-horizontal", "横向展开", { disabled: !connected || !resource.value.count || resource.value.locked }));
@@ -1418,6 +1421,7 @@ function renderSelectionDock() {
       elements.selectionMeta.textContent = `${stack.length} 张`;
       elements.selectionTitle.textContent = card.face?.label || "背面牌堆";
       actions.push(makeSelectionAction("draw-stack", "cards-three", "抽一张", { accent: true, disabled: !canEdit || stackLocked }));
+      actions.push(makeSelectionAction("deal-cards", "users-three", "发牌", { disabled: !canEdit || stackLocked || app.pendingCommands.has("deal-resources") }));
       actions.push(makeSelectionAction("shuffle-stack", "shuffle", "洗牌", { disabled: !canEdit || stackLocked }));
       actions.push(makeSelectionAction("spread-stack", "arrows-out-line-horizontal", "横向展开", { disabled: !canEdit || stackLocked }));
       secondaryActions.push(makeSelectionAction("spread-stack-column", "arrows-out-line-horizontal", "纵向展开", { disabled: !canEdit || stackLocked }));
@@ -1469,6 +1473,7 @@ function renderSelectionDock() {
 
 function runSelectionAction(action) {
   if (action === "focus-selection") { focusSelection(); return; }
+  if (action === "deal-cards") { dealer.open(selectionReferences(), { stackId: app.selection?.type === "card" ? app.selection.id : null }); return; }
   if (app.selection?.type === "group") { runGroupSelectionAction(action); return; }
   const resource = selectedResource();
   if (!resource || !app.state || resourceDropPending(resource.type, resource.value.id)) return;
@@ -2076,33 +2081,6 @@ function renderTurn() {
   app.lastTurnPlayerId = activePlayer?.id || null;
 }
 
-function renderDealOptions() {
-  const playerCount = Math.max(1, app.state.players.length);
-  const maximum = Math.min(10, Math.floor(activeDeck().count / playerCount));
-  if (Number(elements.dealCount.dataset.maximum) !== maximum) {
-    const current = Math.max(1, Number(elements.dealCount.value) || 1);
-    if (maximum === 0) {
-      const option = document.createElement("option");
-      option.value = "0";
-      option.textContent = "牌不够";
-      elements.dealCount.replaceChildren(option);
-    } else {
-      const options = Array.from({ length: maximum }, (_, index) => {
-        const count = index + 1;
-        const option = document.createElement("option");
-        option.value = String(count);
-        option.textContent = `${count} 张`;
-        return option;
-      });
-      elements.dealCount.replaceChildren(...options);
-      elements.dealCount.value = String(Math.min(current, maximum));
-    }
-    elements.dealCount.dataset.maximum = String(maximum);
-  }
-  const selected = Number(elements.dealCount.value) || 0;
-  elements.dealCards.textContent = selected > 0 ? `发 ${selected} 张/人` : "无法发牌";
-}
-
 function playerColor(playerId) {
   return app.state.players.find((player) => player.id === playerId)?.color || "#e9b94d";
 }
@@ -2132,8 +2110,7 @@ function renderTools() {
   const pending = (type) => app.pendingCommands.has(type);
   const deck = activeDeck();
   const deckPending = resourceDropPending("deck", deck.id);
-  const selectionPending = pending("selection-operation");
-  const maximumDeal = Number(elements.dealCount.dataset.maximum) || 0;
+  const selectionPending = pending("selection-operation") || pending("deal-resources");
   elements.rollDie.disabled = !connected || pending("roll-die");
   elements.decrementCounter.disabled = !connected || pending("adjust-counter") || counter.value <= counter.min;
   elements.incrementCounter.disabled = !connected || pending("adjust-counter") || counter.value >= counter.max;
@@ -2144,8 +2121,8 @@ function renderTools() {
   elements.nextTurn.textContent = app.state.turn?.activePlayerId === app.state.you.id ? "结束回合" : "下一位";
   elements.undoTable.disabled = !connected || !isHost || !app.state.canUndo || pending("undo") || selectionPending;
   elements.drawCard.disabled = !connected || !deck.canDraw || pending("draw") || deckPending;
-  elements.dealCount.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each") || deckPending;
-  elements.dealCards.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each") || deckPending;
+  elements.dealCards.disabled = !connected || !deck.count || pending("deal-resources") || deckPending;
+  elements.dealCards.title = `从「${deck.label || "起始牌盒"}」选择收牌人和张数`;
   elements.shuffleDeck.disabled = !connected || deck.count < 2 || pending("shuffle") || deckPending;
   elements.quickUndo.disabled = elements.undoTable.disabled;
   elements.quickUndo.title = isHost ? "撤销上一步 · U" : "由房主撤销操作";
@@ -2176,6 +2153,7 @@ function renderTools() {
   renderSelectionDock();
   workspace?.renderSaveStatus();
   workspace?.renderChatControls();
+  dealer?.render();
 }
 
 function renderRoom() {
@@ -2201,7 +2179,6 @@ function renderRoom() {
   renderDie();
   renderCounter();
   renderTurn();
-  renderDealOptions();
   renderActivity();
   renderTools();
   renderCursors();
@@ -3303,7 +3280,7 @@ async function postRealtimeMessage(message, quiet = false) {
   });
 }
 
-async function sendCommand(command, { withReceipt = false, pendingKey = command.type, dragId } = {}) {
+async function sendCommand(command, { withReceipt = false, pendingKey = command.type, dragId, onError } = {}) {
   if (app.previewTransition && !["restore-game", "restore-scene"].includes(command.type)) {
     toast("正在备份并切换试玩桌面，请稍候再操作。");
     return false;
@@ -3319,13 +3296,14 @@ async function sendCommand(command, { withReceipt = false, pendingKey = command.
   if (app.state) renderTools();
   try {
     const viewerId = app.state?.you.id;
-    const result = previewMode ? await applyPreviewCommand(command) : await recovery.send(command, { pendingKey, dragId });
+    const result = previewMode ? await applyPreviewCommand(command) : await recovery.send(command, { pendingKey, dragId, onError });
     if (!result?.ok) return false;
     if (!previewMode && result.state?.you.id === viewerId && app.state?.you.id === viewerId && result.state.revision > app.state.revision) {
       app.state = result.state; app.player = result.state.you; renderRoom();
     }
     return withReceipt ? result : true;
   } catch (error) {
+    onError?.(error);
     toast(error.message || "操作没有成功。", "error");
     if (command.type === "set-turn" && app.state) renderTurn();
     return false;
@@ -3466,11 +3444,7 @@ elements.nextTurn.addEventListener("click", () => sendCommand({ type: "advance-t
 elements.passTurn.addEventListener("click", () => sendCommand({ type: "advance-turn" }));
 elements.undoTable.addEventListener("click", () => sendCommand({ type: "undo" }));
 elements.drawCard.addEventListener("click", () => sendCommand({ type: "draw", deckId: activeDeck()?.id }));
-elements.dealCount.addEventListener("change", renderDealOptions);
-elements.dealCards.addEventListener("click", () => {
-  const count = Number(elements.dealCount.value);
-  if (Number.isInteger(count) && count > 0) sendCommand({ type: "deal-each", count, deckId: activeDeck()?.id });
-});
+elements.dealCards.addEventListener("click", () => dealer.open([{ type: "deck", id: activeDeck()?.id }]));
 elements.shuffleDeck.addEventListener("click", () => sendCommand({ type: "shuffle", deckId: activeDeck()?.id }));
 elements.tidyPublic.addEventListener("click", () => sendCommand({ type: "tidy-public" }));
 elements.collectPublic.addEventListener("click", () => {
@@ -3791,7 +3765,7 @@ elements.resetCamera.addEventListener("click", fitAll);
 
 // Native Tab focus uses the camera; pointer focus and sync-driven DOM replacements do not.
 document.addEventListener("keydown", (event) => {
-  app.keyboardFocusPending = event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey;
+  app.keyboardFocusPending = event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey && !document.querySelector("dialog[open]");
   if (!app.keyboardFocusPending) return;
   app.selectionIntent++;
   window.setTimeout(() => { app.keyboardFocusPending = false; }, 0);
@@ -4003,5 +3977,20 @@ workspace = window.ParlorWorkspace.create({
   }
 });
 feedback = window.ParlorFeedback.create({ app, toast, clearSelection, sendCommand, postRealtimeMessage, openChat: () => workspace.showChat(), openHistory: showHistory, previewMode });
+dealer = window.ParlorDeal.create({
+  app, toast, sendCommand, tableResource, resourceDropPending, stack: visibleStackForCard,
+  onOpen: () => { elements.selectionActions.querySelector(".selection-more")?.removeAttribute("open"); hideSidePanels(); },
+  onDealt: (receipt, draft, { focus }) => {
+    if (app.selectionIntent !== draft.intent || `${app.state?.room.gameId}:${app.state?.room.epoch}:${app.state?.you.id}` !== draft.context) return;
+    const references = receipt.selectedResources || [];
+    if (references.length === 1) selectResource(references[0].type, references[0].id, { preserveIntent: true });
+    else if (draft.selectionType === "card" && references.length) selectResource("card", references.at(-1).id, { preserveIntent: true });
+    else setGroupSelection(references, { preserveIntent: true });
+    if (focus && !document.querySelector("dialog[open]")) {
+      const target = elements.selectionActions.querySelector('[data-selection-action="deal-cards"]:not(:disabled)');
+      (target?.closest("details:not([open])")?.querySelector("summary") || target || elements.openHand).focus({ preventScroll: true });
+    }
+  }
+});
 syncToolDrawer();
 void initialize();

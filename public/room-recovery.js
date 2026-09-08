@@ -104,7 +104,7 @@
         } else {
           pending.delete(item.record.id); markPending(item.record, false);
           persistPendingFallback(); await vault.deletePending(item.record.id).catch(() => {});
-          item.resolve?.(null); ui.toast(error.message, "error");
+          item.onError?.(error); item.resolve?.(null); ui.toast(error.message, "error");
           if (error.status === 401) ui.onSessionExpired?.();
         }
       } finally { item.inFlight = false; notifyPending(); schedule(); }
@@ -126,7 +126,7 @@
         notifyPending(); retry();
       } finally { restoring = false; }
     }
-    async function send(command, { pendingKey = command.type, dragId } = {}) {
+    async function send(command, { pendingKey = command.type, dragId, onError } = {}) {
       const state = app.state;
       recordId = `${state.room.gameId}:${state.you.id}`;
       const id = root.crypto.randomUUID();
@@ -135,7 +135,7 @@
       } };
       let resolve;
       const result = new Promise((done) => { resolve = done; });
-      const item = { record, resolve };
+      const item = { record, resolve, onError };
       pending.set(id, item); markPending(record, true); persistPendingFallback(); notifyPending();
       await vault.savePending(record).catch(() => {});
       void transmit(item); schedule();

@@ -1352,10 +1352,78 @@ function retireMergedDeck(room, source, destination) {
   else room.decks.delete(source.id);
 }
 
+function cardDealPlan(available, recipients, { mode = "count", count = 1, remainder = "keep" } = {}) {
+  if (!Number.isSafeInteger(available) || available < 0) throw new RoomError("INVALID_DEAL_SOURCE", "无法读取这叠牌的数量。");
+  if (!Number.isSafeInteger(recipients) || recipients < 1 || recipients > 8) throw new RoomError("NO_DEAL_RECIPIENTS", "请至少选择一位收牌人。");
+  if (!available) throw new RoomError("DECK_EMPTY", "这叠牌已经空了。", 409);
+  if (!["count", "equal"].includes(mode) || !["keep", "distribute"].includes(remainder)) throw new RoomError("INVALID_DEAL_MODE", "请选择有效的发牌方式。");
+  const each = mode === "equal" ? Math.floor(available / recipients) : count;
+  if (!Number.isSafeInteger(each) || each < 0 || (mode === "count" && each < 1)) throw new RoomError("INVALID_DEAL_COUNT", "每人张数需要填写大于 0 的整数。");
+  const extra = mode === "equal" && remainder === "distribute" ? available % recipients : 0;
+  const total = each * recipients + extra;
+  if (!Number.isSafeInteger(total) || total > available) throw new RoomError("NOT_ENOUGH_CARDS", `这叠牌剩 ${available} 张，最多给 ${recipients} 人每人发 ${Math.floor(available / recipients)} 张。`, 409);
+  if (!total) throw new RoomError("NOT_ENOUGH_CARDS", "牌不够每人一张，可减少收牌人或选择随机分配余牌。", 409);
+  return { each, extra, maximum: each + (extra ? 1 : 0), total, remaining: available - total };
+}
+
+function dealResources(room, actor, command, resources) {
+  const cards = selectionCards(room, resources);
+  const playerIds = command.playerIds;
+  if (!Array.isArray(playerIds) || !playerIds.length || playerIds.length > 8 || new Set(playerIds).size !== playerIds.length) {
+    throw new RoomError("INVALID_DEAL_RECIPIENTS", "请选择不重复的收牌人。");
+  }
+  const players = playerIds.map((id) => {
+    const player = typeof id === "string" && room.players.get(id);
+    if (!player) throw new RoomError("DEAL_PLAYERS_CHANGED", "有收牌人已离席，请重新选择。", 409);
+    return player;
+  }).sort((a, b) => a.seatIndex - b.seatIndex);
+  if (!["random", "top"].includes(command.order)) throw new RoomError("INVALID_DEAL_ORDER", "请选择随机抽牌或按牌堆顺序发牌。");
+  if (command.expectedCount !== undefined && command.expectedCount !== cards.length) throw new RoomError("SELECTION_CHANGED", "牌堆数量已变化，请核对后重新发牌。", 409);
+  cards.forEach(assertUnlocked);
+  const plan = cardDealPlan(cards.length, players.length, command);
+  const drawn = (command.order === "random" ? shuffled(cards) : [...cards].reverse()).slice(0, plan.total);
+  const drawnIds = new Set(drawn.map((card) => card.id));
+  const bonuses = new Set(plan.extra ? shuffled(players).slice(0, plan.extra).map((player) => player.id) : []);
+  const allocations = players.map((player) => ({ player, count: plan.each + (bonuses.has(player.id) ? 1 : 0) }));
+  const remaining = resources.flatMap(({ type, value }) => type === "deck" || !drawnIds.has(value.id) ? [{ type, id: value.id }] : []);
+  const sourceLabel = resources.length === 1 && resources[0].type === "deck" ? resources[0].value.label
+    : resources.every(({ type }) => type === "card") ? "公共牌堆" : "所选牌堆";
+  // Reuse the first free slot search for each recipient instead of rescanning
+  // all earlier occupied slots for every card in a large deal.
+  const slots = new Map(players.map((player) => [player.id, {
+    zone: privateZoneForPlayer(room, player.id), cursor: 0,
+    occupied: [...room.cards.values()].filter((card) => card.zone === "hand" && card.ownerId === player.id).map((card) => privateCardPosition(room, card))
+  }]));
+  const nextSlot = (playerId) => {
+    const slot = slots.get(playerId);
+    while (slot.cursor <= slot.occupied.length + 24) {
+      const point = privateSlot(slot.zone, slot.cursor++);
+      if (!slot.occupied.some((other) => Math.abs(other.x - point.x) < 5 && Math.abs(other.y - point.y) < 5)) { slot.occupied.push(point); return point; }
+    }
+    const point = privateSlot(slot.zone, slot.occupied.length); slot.occupied.push(point); return point;
+  };
+  saveUndoPoint(room);
+  for (const { type, value } of resources) if (type === "deck") value.order = value.order.filter((id) => !drawnIds.has(id));
+  // Public cards and previously exposed top cards must not carry a trackable
+  // identity into another player's private hand after random allocation.
+  rekeyCards(room, drawn);
+  let index = 0;
+  for (let round = 0; round < plan.maximum; round++) for (const { player, count } of allocations) {
+    if (round < count) {
+      const card = drawn[index++];
+      placeInHand(room, card, player.id, nextSlot(player.id), card.rotation);
+    }
+  }
+  addHistory(room, actor, `从「${sourceLabel}」${command.order === "random" ? "随机" : "按牌堆顺序"}发牌：${allocations.map(({ player, count }) => `${player.name} ${count} 张`).join("、")}；余 ${plan.remaining} 张`);
+  touch(room);
+  return { selectedResources: remaining };
+}
+
 function applySelectionCommand(room, actor, command) {
-  if (!["return-resources", "gather-resources", "shuffle-resources", "spread-resources", "flip-resources", "lock-resources"].includes(command.type)) return false;
+  if (!["return-resources", "gather-resources", "shuffle-resources", "spread-resources", "flip-resources", "lock-resources", "deal-resources"].includes(command.type)) return false;
   const resources = tableSelectionResources(room, command.resources);
   selectionOriginsUnchanged(room, command.resources);
+  if (command.type === "deal-resources") return dealResources(room, actor, command, resources);
   const refs = (members) => members.map(({ type, value }) => ({ type, id: value.id }));
   const commit = (label, selectedResources, effect) => {
     addHistory(room, actor, label, effect ? { effect } : {}); touch(room);
@@ -2825,5 +2893,5 @@ function roomSummary(room) {
   };
 }
 
-root.ParlorEngine = Object.freeze({ BOARD_LAYOUTS, BOARD_RESOURCES, BOARD_GAME_SETS, TABLE_GEOMETRY, RoomError, privateZoneForSeat, privateCardPosition, requestPrivateCards, cancelPrivateCardRequest, cardSource, isExposedDeckCard, publicStackForCard, tokenStackIndex, tokenStackMembers, validateGamePack, validatePortablePack, createRoom, replaceRoomPack, joinRoom, playerForSession, setPlayerConnection, RESOURCE_CATALOG, addRoomPack, tableSelectionResources, tableResourceBounds, tableSelectionDelta, applyCommand, exportRoomScene, validateRoomScene, restoreRoomScene, exportRoomGame, validateRoomGame, restoreRoomGame, exportRoomCheckpoint, roomFromCheckpoint, projectRoom, roomSummary });
+root.ParlorEngine = Object.freeze({ BOARD_LAYOUTS, BOARD_RESOURCES, BOARD_GAME_SETS, TABLE_GEOMETRY, RoomError, privateZoneForSeat, privateCardPosition, requestPrivateCards, cancelPrivateCardRequest, cardSource, isExposedDeckCard, publicStackForCard, tokenStackIndex, tokenStackMembers, validateGamePack, validatePortablePack, createRoom, replaceRoomPack, joinRoom, playerForSession, setPlayerConnection, RESOURCE_CATALOG, addRoomPack, tableSelectionResources, tableResourceBounds, tableSelectionDelta, cardDealPlan, applyCommand, exportRoomScene, validateRoomScene, restoreRoomScene, exportRoomGame, validateRoomGame, restoreRoomGame, exportRoomCheckpoint, roomFromCheckpoint, projectRoom, roomSummary });
 })(globalThis);
