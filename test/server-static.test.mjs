@@ -49,9 +49,10 @@ test("entry pages reference current client assets and runtime files require cach
   await serveStatic(response, "/");
   const html = response.body.toString("utf8");
   const assets = [...html.matchAll(/(?:src|href)="(\.\/[^\"]+\.(?:js|css)\?v=[a-f0-9]{16})"/g)].map((match) => match[1]);
-  assert.equal(assets.length, 14);
+  assert.equal(assets.length, 15);
   assert.ok(assets.some((asset) => asset.startsWith("./board-art.js?v=")), "board artwork must use the versioned offline shell too");
   assert.ok(assets.some((asset) => asset.startsWith("./deal-ui.js?v=")), "the dealing dialog must be included in the versioned offline shell");
+  assert.ok(assets.some((asset) => asset.startsWith("./quick-phrases.js?v=")), "cursor phrases must work in the offline shell too");
   assert.equal(response.headers["Cache-Control"], "no-cache");
   for (const asset of assets) {
     const file = new MockResponse();

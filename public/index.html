@@ -20,6 +20,7 @@
     <script defer src="./board-art.js"></script>
     <script defer src="./workspace-ui.js"></script>
     <script defer src="./room-feedback.js"></script>
+    <script defer src="./quick-phrases.js"></script>
     <script defer src="./deal-ui.js"></script>
     <script defer src="./app.js"></script>
     <script defer src="./offline-client.js"></script>
@@ -156,6 +157,7 @@
             <div id="drag-root" class="drag-root"></div>
           </div>
           <div id="local-cursor-root" class="local-cursor-root" aria-hidden="true"></div>
+          <div id="cursor-phrase-root" class="cursor-phrase-root" aria-hidden="true"></div>
           <div id="selection-box" class="selection-box is-hidden" aria-hidden="true"></div>
         </div>
         <div id="turn-indicator" class="turn-indicator is-hidden">
@@ -172,6 +174,7 @@
             </button>
             <button id="open-world" class="rail-button" type="button" aria-controls="world-panel" aria-expanded="false" data-tooltip="桌面导航" aria-label="桌面导航"><i data-ph="crosshair"></i><b>世界</b></button>
             <button id="open-chat" class="rail-button" type="button" aria-controls="quick-chat" aria-expanded="false" data-tooltip="聊天 · C" aria-label="聊天"><i data-ph="users-three"></i><b>聊天</b><span id="chat-unread" class="chat-unread is-hidden"></span></button>
+            <button id="open-phrases" class="rail-button" type="button" aria-controls="quick-phrases" aria-expanded="false" aria-haspopup="dialog" data-tooltip="快捷短语 · T" aria-label="快捷短语（T）"><i data-ph="chat-circle-dots"></i><b>短语</b></button>
             <button id="open-history" class="rail-button" type="button" aria-controls="history-panel" aria-expanded="false" data-tooltip="操作历史 · L" aria-label="操作历史"><i data-ph="clock-counter-clockwise"></i><b>历史</b></button>
           </div>
           <div class="table-rail__divider" aria-hidden="true"></div>
@@ -187,6 +190,13 @@
             </button>
           </div>
         </nav>
+
+        <section id="quick-phrases" class="quick-phrases is-hidden" role="dialog" aria-labelledby="phrase-title" aria-describedby="phrase-description">
+          <header><div><strong id="phrase-title">说一句</strong><p id="phrase-description">出现在你的鼠标旁 · 5 秒</p></div><button id="close-phrases" type="button" aria-label="收起快捷短语"><i data-ph="x"></i></button></header>
+          <div id="phrase-options" class="phrase-options"></div>
+          <footer id="phrase-status">点选或按数字发送 · Esc 收起</footer>
+        </section>
+        <div id="phrase-announcement" class="phrase-announcement" role="status" aria-live="polite" aria-atomic="true"></div>
 
         <section id="quick-chat" class="quick-chat is-hidden" aria-label="轻量聊天">
           <header>
@@ -356,7 +366,7 @@
         <div class="help-grid help-grid--compact">
           <article><span>01</span><strong>拖动与旋转</strong><p>拖动资源改变位置；棋盘拖边框，内部空白处拖动镜头。拖牌时按 <kbd>Q</kbd>/<kbd>E</kbd>，或按住 <kbd>⌥</kbd> 左右移动即可旋转。手机手牌横滑浏览、向桌面拖出。</p></article>
           <article><span>02</span><strong>整组与多选</strong><p>按住 <kbd>Shift</kbd> 点选增减，或从空白处拖框选择；松开 Shift 后拖动任一已选物件一起移动。<kbd>Shift F</kbd> 聚焦所选，<kbd>F</kbd> 看全桌，<kbd>Esc</kbd> 取消。</p></article>
-          <article><span>03</span><strong>私人区随手摆</strong><p>按 <kbd>I</kbd> 看手牌，双击或点「展示手牌」原地亮牌，再点一次收回展示。点朋友的牌可提出交付请求。按 <kbd>C</kbd> 打开可拖动的小聊天框。</p></article>
+          <article><span>03</span><strong>私人区与交流</strong><p>按 <kbd>I</kbd> 看手牌，双击或点「展示手牌」原地亮牌，再点一次收回展示。点朋友的牌可提出交付请求。<kbd>C</kbd> 打开小聊天框；<kbd>T</kbd> 打开快捷短语，再按数字发送，气泡跟随鼠标显示 5 秒。</p></article>
           <article><span>04</span><strong>下次接着玩</strong><p>完整对局存档保留手牌、展示状态、牌序和桌面布置，可保存到当前浏览器或导出文件。房主与当前回合者都能转交行动标记。</p></article>
         </div>
         <footer class="help-sheet__footer">

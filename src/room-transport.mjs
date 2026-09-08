@@ -1,6 +1,8 @@
 import {
   RoomError,
   TABLE_GEOMETRY,
+  QUICK_PHRASE_COOLDOWN,
+  quickPhraseSignal,
   applyCommand,
   addRoomPack,
   exportRoomScene,
@@ -182,6 +184,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
   const streams = new Set();
   const lastCursorAt = new Map();
   const lastPingAt = new Map();
+  const lastPhraseAt = new Map();
   const stackCache = new Map(), endedDrags = new Map();
   const syncId = randomUUID(), signals = [], pollingSessions = new Map();
   let signalSequence = 0;
@@ -394,11 +397,15 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
         pollingSessions.set(sessionToken, { playerId: player.id, at: Date.now() });
         const cursor = Number(requestUrl.searchParams.get("cursor"));
         const reset = requestUrl.searchParams.get("sync") !== syncId || !Number.isSafeInteger(cursor) || cursor < 0 || cursor > signalSequence;
+        const now = Date.now();
         const pending = reset ? [] : signals.filter((signal) => signal.sequence > cursor
-          && signal.at > Date.now() - 15000 && signal.exceptPlayerId !== player.id);
+          && signal.at > now - 15000 && signal.exceptPlayerId !== player.id
+          && (signal.payload.type !== "quick-phrase" || signal.payload.expiresAt > now));
         // A slow connection needs only each player's latest pointer position.
         const latestCursor = new Map(pending.filter(({ payload }) => payload.type === "cursor").map((signal) => [signal.payload.playerId, signal]));
-        const events = pending.filter((signal) => signal.payload.type !== "cursor" || latestCursor.get(signal.payload.playerId) === signal).map(({ payload }) => payload);
+        const latestPhrase = new Map(pending.filter(({ payload }) => payload.type === "quick-phrase").map((signal) => [signal.payload.playerId, signal]));
+        const events = pending.filter((signal) => (signal.payload.type !== "cursor" || latestCursor.get(signal.payload.playerId) === signal)
+          && (signal.payload.type !== "quick-phrase" || latestPhrase.get(signal.payload.playerId) === signal)).map(({ payload }) => payload);
         if (reset) for (const signal of room.cardRequests.values()) if (signal.expiresAt > Date.now()) events.push(signal);
         const changed = reset || Number(requestUrl.searchParams.get("revision")) !== room.revision
           || requestUrl.searchParams.get("epoch") !== room.epoch;
@@ -558,6 +565,19 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
           return true;
         }
 
+        if (message.type === "quick-phrase") {
+          if (closing) throw new RoomError("ROOM_CLOSING", "房间正在关闭，请稍后再试。", 503);
+          const now = Date.now();
+          const signal = quickPhraseSignal(room, player.id, message, now);
+          if (now - (lastPhraseAt.get(player.id) ?? -Infinity) < QUICK_PHRASE_COOLDOWN) {
+            throw new RoomError("PHRASE_TOO_FAST", "短语发送太快，请稍等一下。", 429);
+          }
+          lastPhraseAt.set(player.id, now);
+          broadcastSignal(signal);
+          sendJson(request, response, 200, { ok: true, signal });
+          return true;
+        }
+
         if (message.type === "ping") {
           const now = Date.now();
           const x = Number(message.x);
@@ -618,6 +638,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
   };
 
   const heartbeat = setInterval(() => {
+    for (const [id, at] of lastPhraseAt) if (at < Date.now() - QUICK_PHRASE_COOLDOWN) lastPhraseAt.delete(id);
     for (const [id, ended] of endedDrags) if (ended.at < Date.now() - 15000) endedDrags.delete(id);
     while (signals.length && signals[0].at < Date.now() - 15000) signals.shift();
     for (const [session, polling] of pollingSessions) {
@@ -664,6 +685,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
       streams.clear();
       for (const { playerId } of pollingSessions.values()) if (room.players.has(playerId)) setPlayerConnection(room, playerId, -1);
       pollingSessions.clear();
+      lastPhraseAt.clear();
       signals.length = 0;
     }
   };

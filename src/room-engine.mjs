@@ -13,6 +13,20 @@ export const TABLE_GEOMETRY = Object.freeze({
   deck: Object.freeze({ x: 853, y: 407 })
 });
 
+export const QUICK_PHRASES = Object.freeze([
+  { id: "hello", text: "你好！" },
+  { id: "check", text: "过牌！" },
+  { id: "call", text: "跟注" },
+  { id: "raise", text: "加注" },
+  { id: "all-in", text: "ALL IN！" },
+  { id: "hurry", text: "快点，等到花都谢了" },
+  { id: "reveal", text: "开牌！" },
+  { id: "wait", text: "稍等一下" },
+  { id: "your-turn", text: "轮到你了" }
+].map(Object.freeze));
+export const QUICK_PHRASE_LIFETIME = 5000;
+export const QUICK_PHRASE_COOLDOWN = 800;
+
 const PLAYER_COLORS = [
   "#ff6247",
   "#4388ff",
@@ -136,6 +150,26 @@ function placeInHand(room, card, ownerId, point, rotation = 0) {
     zone: "hand", ownerId, faceUp: sameHand && card.faceUp === true, rotation: clamp(Number(rotation) || 0, -180, 180),
     handOrder: sameHand ? card.handOrder : room.nextHandOrder++, z: room.nextZ++
   });
+}
+
+// Speech is an ephemeral signal, never a tabletop command or saved game action.
+export function quickPhraseSignal(room, playerId, message, now = Date.now()) {
+  const actor = requirePlayer(room, playerId);
+  const phrase = QUICK_PHRASES.find((item) => item.id === message?.phraseId);
+  if (!phrase) throw new RoomError("INVALID_PHRASE", "请选择一条快捷短语。");
+  if (![message.x, message.y].every((value) => typeof value === "number" && Number.isFinite(value))) {
+    throw new RoomError("INVALID_PHRASE_POSITION", "没有收到有效的鼠标位置。");
+  }
+  const zone = TABLE_GEOMETRY.publicZone;
+  return {
+    type: "quick-phrase", id: randomUUID(), epoch: room.epoch,
+    ...(typeof message.requestId === "string" && /^[\w-]{1,80}$/.test(message.requestId) ? { requestId: message.requestId } : {}),
+    playerId: actor.id, name: actor.name, color: actor.color,
+    phraseId: phrase.id, text: phrase.text,
+    x: clamp(message.x, zone.x, zone.x + zone.width),
+    y: clamp(message.y, zone.y, zone.y + zone.height),
+    at: now, expiresAt: now + QUICK_PHRASE_LIFETIME
+  };
 }
 
 export function requestPrivateCards(room, playerId, cardIds, now = Date.now()) {

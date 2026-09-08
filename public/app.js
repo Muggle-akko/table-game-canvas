@@ -188,6 +188,7 @@ const app = {
 
 let workspace;
 let feedback;
+let phrases;
 let dealer;
 let recovery;
 let previewRecovery;
@@ -782,6 +783,7 @@ function setConnectionState(status) {
   }
   elements.connectionDot.setAttribute("aria-label", label);
   elements.connectionDot.title = label;
+  phrases?.sync();
 }
 
 function receiveRoomEvent(message, { initial = app.awaitingInitialState } = {}) {
@@ -827,6 +829,11 @@ function receiveRoomEvent(message, { initial = app.awaitingInitialState } = {}) 
 
   if (message.type === "card-request" || message.type === "card-request-end") {
     feedback?.receiveRequest(message);
+    return;
+  }
+
+  if (message.type === "quick-phrase") {
+    phrases?.receive(message);
     return;
   }
 
@@ -2157,6 +2164,7 @@ function renderTools() {
 }
 
 function renderRoom() {
+  phrases?.sync();
   if (!app.state) return;
   const visualRoomKey = `${app.state.room.gameId}:${app.state.room.epoch}:${app.state.you.id}`;
   if (app.visualRoomKey && app.visualRoomKey !== visualRoomKey) {
@@ -2202,6 +2210,7 @@ function applyCamera() {
   elements.viewport.style.setProperty("--grid-y", `${y}px`);
   workspace?.drawMap();
   if (app.localCursor?.visible) renderCursors();
+  else phrases?.render();
   recovery?.capture();
   previewRecovery?.capture();
 }
@@ -2609,6 +2618,7 @@ function renderCursors() {
   } else {
     elements.localCursorRoot.replaceChildren();
   }
+  phrases?.render();
 }
 
 function remoteDragPreview(message) {
@@ -3258,6 +3268,7 @@ async function applyPreviewCommand(command) {
 async function postRealtimeMessage(message, quiet = false) {
   if (previewMode) {
     const room = app.previewModel.engineRoom;
+    if (message.type === "quick-phrase") return { ok: true, signal: window.ParlorEngine.quickPhraseSignal(room, app.state.you.id, message) };
     if (message.type === "card-request") return { ok: true, signal: window.ParlorEngine.requestPrivateCards(room, app.state.you.id, message.cardIds) };
     if (message.type === "card-request-end") return { ok: true, signal: window.ParlorEngine.cancelPrivateCardRequest(room, app.state.you.id) };
     return { ok: true };
@@ -3348,6 +3359,7 @@ async function leaveCurrentSeat() {
   app.sessionToken = null;
   app.player = null;
   app.state = null;
+  phrases?.reset();
   app.localCursor = null;
   app.lastTablePoint = null;
   app.remoteCursors.clear();
@@ -3673,7 +3685,7 @@ window.addEventListener("pointermove", (event) => {
     && event.clientX <= viewportRect.right
     && event.clientY >= viewportRect.top
     && event.clientY <= viewportRect.bottom;
-  const overStageControl = event.target.closest?.(".zoom-controls, .turn-indicator, .quick-chat, .reconnect-banner, .selection-dock");
+  const overStageControl = event.target.closest?.(".zoom-controls, .turn-indicator, .table-rail, .quick-chat, .quick-phrases, .reconnect-banner, .selection-dock");
   if (inside && !overStageControl && app.state) {
     const point = screenToWorld(event.clientX, event.clientY);
     app.lastTablePoint = point;
@@ -3787,6 +3799,7 @@ document.addEventListener("keydown", (event) => {
     if (app.drag || app.pan || libraryCancelled || handCancelled || touchCancelled) { event.preventDefault(); cancelDrag(); cancelPan(); return; }
   }
   if (document.querySelector("dialog[open]")) return;
+  if (app.state && elements.helpPanel.classList.contains("is-hidden") && !elements.room.classList.contains("is-hidden") && phrases?.keydown(event)) return;
   const openMenu = elements.selectionActions.querySelector("details[open]");
   if (event.key === "Escape" && openMenu) {
     event.preventDefault(); openMenu.removeAttribute("open"); openMenu.querySelector("summary")?.focus(); return;
@@ -3977,6 +3990,7 @@ workspace = window.ParlorWorkspace.create({
   }
 });
 feedback = window.ParlorFeedback.create({ app, toast, clearSelection, sendCommand, postRealtimeMessage, openChat: () => workspace.showChat(), openHistory: showHistory, previewMode });
+phrases = window.ParlorPhrases.create({ app, toast, postRealtimeMessage, screenToWorld, worldToViewport });
 dealer = window.ParlorDeal.create({
   app, toast, sendCommand, tableResource, resourceDropPending, stack: visibleStackForCard,
   onOpen: () => { elements.selectionActions.querySelector(".selection-more")?.removeAttribute("open"); hideSidePanels(); },
