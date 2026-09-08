@@ -182,6 +182,7 @@ const app = {
   selection: null,
   marquee: null,
   selectionIntent: 0,
+  keyboardFocusPending: false,
   selectionTransferOpen: false,
   previewModel: null
 };
@@ -2237,6 +2238,21 @@ function focusSelection() {
   focusWorldBounds(unionBounds(bounds));
 }
 
+function focusKeyboardResource(target) {
+  const pending = app.keyboardFocusPending;
+  app.keyboardFocusPending = false;
+  if (!pending || !app.state || app.drag || app.pan || app.marquee || app.touchNavigation || app.handTouch || app.tableTouches.size
+      || elements.room.classList.contains("is-hidden") || !elements.helpPanel.classList.contains("is-hidden") || document.querySelector("dialog[open]")) return;
+  const node = target.closest?.(".playing-card, .deck-stack, .table-token, .world-object");
+  if (!node || !elements.world.contains(node)) return;
+  const rect = node.getBoundingClientRect(), viewport = elements.viewport.getBoundingClientRect(), area = cameraViewArea(viewport);
+  if (!rect.width || !rect.height) return;
+  if (rect.left >= viewport.left + area.x && rect.right <= viewport.left + area.x + area.width
+      && rect.top >= viewport.top + area.y && rect.bottom <= viewport.top + area.y + area.height) return;
+  const point = screenToWorld(rect.left, rect.top);
+  focusWorldBounds({ ...point, width: rect.width / app.camera.scale, height: rect.height / app.camera.scale }, { maxScale: app.camera.scale, padding: 24 });
+}
+
 function fitCamera() {
   const rect = elements.viewport.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
@@ -3705,6 +3721,16 @@ elements.zoomIn.addEventListener("click", () => setZoom(app.camera.scale * 1.16)
 elements.zoomOut.addEventListener("click", () => setZoom(app.camera.scale / 1.16));
 elements.resetCamera.addEventListener("click", fitAll);
 
+// Native Tab focus uses the camera; pointer focus and sync-driven DOM replacements do not.
+document.addEventListener("keydown", (event) => {
+  app.keyboardFocusPending = event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey;
+  if (!app.keyboardFocusPending) return;
+  app.selectionIntent++;
+  window.setTimeout(() => { app.keyboardFocusPending = false; }, 0);
+}, true);
+document.addEventListener("focusin", (event) => focusKeyboardResource(event.target));
+document.addEventListener("pointerdown", () => { app.keyboardFocusPending = false; }, true);
+
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest(".selection-more")) elements.selectionActions.querySelector(".selection-more")?.removeAttribute("open");
   if (!event.target.closest(".world-overview, #toggle-minimap")) workspace?.hideMinimap();
@@ -3839,6 +3865,7 @@ window.addEventListener("beforeunload", (event) => {
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") void previewRecovery?.flush(); });
 
 window.addEventListener("blur", () => {
+  app.keyboardFocusPending = false;
   cancelHandInteraction();
   cancelTableTouches();
   cancelDrag();

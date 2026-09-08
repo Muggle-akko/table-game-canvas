@@ -19,6 +19,11 @@ async function add(client, key) {
   await client.dispatch(client.document.querySelector(`.asset-add[data-add-asset="${key}"]`), "click");
 }
 
+function renderBounds(client, node, bounds) {
+  const screen = point(client, bounds.x, bounds.y), scale = client.app.camera.scale;
+  node.rect = { left: screen.clientX, top: screen.clientY, width: bounds.width * scale, height: bounds.height * scale };
+}
+
 test("the closed shelf defers art, observes only the current entries, and reuses hydrated thumbnails", async () => {
   let observer;
   class Observer {
@@ -213,4 +218,86 @@ test("focusing rotated boards and mixed selections accounts for panels and the h
   await dispatch($("quick-chat-input"), "keydown", { key: "F", shiftKey: true });
   assert.deepEqual(plain(app.camera), camera);
   assert.equal(app.state.revision, revision);
+});
+
+test("Tab frames an offscreen private card through the camera without changing selection or shared state", async () => {
+  const client = await loadClient(), { app, $, document, dispatch } = client;
+  const card = app.state.cards.find((value) => value.zone === "hand" && value.ownerId === app.state.you.id);
+  const node = $("cards-root").querySelector(`[data-card-id="${card.id}"]`), flip = node.querySelector("[data-card-action]");
+  const bounds = boundsFor(client, "card", { ...card, ...app.cardPositions.get(card.id) });
+  client.selectResource("token", app.state.tokens[0].id);
+  client.vm("app.camera = { x: -2400, y: -1200, scale: .8 }; applyCamera();");
+  const initial = plain(app.camera), selection = plain(app.selection), state = plain(app.state), intent = app.selectionIntent;
+  renderBounds(client, node, bounds);
+  await dispatch(flip, "focusin");
+  assert.deepEqual(plain(app.camera), initial, "ordinary focus does not move the camera");
+  await dispatch(document.body, "keydown", { key: "Tab" });
+  await dispatch(flip, "focusin");
+  assertFramed(client, bounds);
+  assert.equal(app.camera.scale, initial.scale, "keyboard navigation never zooms in");
+  assert.deepEqual(plain(app.selection), selection);
+  assert.deepEqual(plain(app.state), state, "framing is local and never exposes or moves the private card");
+  assert.equal(app.selectionIntent, intent + 1, "Tab supersedes a delayed resource-add receipt");
+  const framed = plain(app.camera);
+  renderBounds(client, node, bounds);
+  await dispatch(flip, "keydown", { key: "Tab", shiftKey: true });
+  await dispatch(node, "focusin");
+  assert.deepEqual(plain(app.camera), framed, "a resource already in view stays still");
+});
+
+test("Tab frames a large rotated board above the hand drawer and clear of an open resource shelf", async () => {
+  const client = await loadClient(), { app, $, document, dispatch } = client;
+  await add(client, "set:chess");
+  const id = app.selection.id;
+  client.vm(`app.previewModel.engineRoom.objects.get(${JSON.stringify(id)}).rotation = 35; syncPreviewState();`);
+  await dispatch($("open-library"), "click");
+  $("library-panel").rect = { left: 80, top: 74, width: 320, height: 790 };
+  await dispatch($("open-hand"), "click");
+  $("selection-dock").rect = { left: 430, top: 530, width: 630, height: 60 };
+  client.vm("app.camera = { x: -900, y: 500, scale: 1 }; applyCamera();");
+  const board = app.state.objects.find((value) => value.id === id), bounds = boundsFor(client, "object", board);
+  const node = $("objects-root").querySelector(`[data-object-id="${id}"]`), revision = app.state.revision;
+  renderBounds(client, node, bounds);
+  await dispatch(document.body, "keydown", { key: "Tab" });
+  await dispatch(node, "focusin");
+  assertFramed(client, bounds, { left: 420, bottom: 394 });
+  assert.ok(app.camera.scale < 1, "a large board may zoom out to fit");
+  assert.equal(app.state.revision, revision);
+});
+
+test("keyboard framing intent is consumed once and cannot outlive pointer input, blur or its event turn", async () => {
+  const client = await loadClient(), { app, $, document, dispatch } = client;
+  const node = $("token-root").querySelector(".table-token");
+  node.rect = { left: -200, top: -180, width: 40, height: 40 };
+  const camera = plain(app.camera);
+  for (const cancel of [
+    () => dispatch($("quick-chat-input"), "focusin"),
+    async () => { await dispatch(node, "pointerdown"); client.cancelDrag(); },
+    () => dispatch(document.body, "blur"),
+    () => dispatch(document.body, "keydown", { key: "Shift" }),
+    () => client.advanceTimers(0)
+  ]) {
+    await dispatch(document.body, "keydown", { key: "Tab" });
+    await cancel();
+    assert.equal(app.keyboardFocusPending, false);
+    await dispatch(node, "focusin");
+    assert.deepEqual(plain(app.camera), camera);
+  }
+  for (const modifier of ["ctrlKey", "metaKey", "altKey"]) {
+    await dispatch(document.body, "keydown", { key: "Tab", [modifier]: true });
+    await dispatch(node, "focusin");
+    assert.deepEqual(plain(app.camera), camera);
+  }
+  for (const interaction of ["drag", "pan", "marquee", "touchNavigation", "handTouch"]) {
+    app[interaction] = {};
+    await dispatch(document.body, "keydown", { key: "Tab" });
+    await dispatch(node, "focusin");
+    assert.equal(app.keyboardFocusPending, false);
+    assert.deepEqual(plain(app.camera), camera, `${interaction} retains its camera`);
+    app[interaction] = null;
+  }
+  app.tableTouches.set(9, { x: 20, y: 30 });
+  await dispatch(document.body, "keydown", { key: "Tab" });
+  await dispatch(node, "focusin");
+  assert.deepEqual(plain(app.camera), camera);
 });

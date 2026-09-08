@@ -58,7 +58,7 @@ export async function loadClient({ width = 1440, height = 900, indexedDB, storag
   class Element {
     constructor(tag = "div") {
       this.tagName = tag.toUpperCase(); this.attributes = new Map(); this.childNodes = []; this.parentElement = null;
-      this.style = style(); this.events = new Map(); this.disabled = false; this._value = undefined; this._text = "";
+      this.style = style(); this.events = new Map(); this.captureEvents = new Map(); this.disabled = false; this._value = undefined; this._text = "";
       this.scrollTop = 0; this.scrollLeft = 0; this.scrollHeight = 200; this.clientHeight = 200; this.files = []; this.rect = null;
       this.dataset = new Proxy({}, {
         get: (_, key) => this.getAttribute(`data-${toData(key)}`) ?? undefined,
@@ -114,7 +114,10 @@ export async function loadClient({ width = 1440, height = 900, indexedDB, storag
     closest(selector) { let node = this; while (node) { if (matches(node, selector)) return node; node = node.parentElement; } return null; }
     querySelectorAll(selector) { const found = []; const visit = (node) => { for (const child of node.children) { if (matches(child, selector)) found.push(child); visit(child); } }; visit(this); return found; }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
-    addEventListener(type, callback) { if (!this.events.has(type)) this.events.set(type, []); this.events.get(type).push(callback); }
+    addEventListener(type, callback, options) {
+      const events = options === true || options?.capture ? this.captureEvents : this.events;
+      if (!events.has(type)) events.set(type, []); events.get(type).push(callback);
+    }
     getBoundingClientRect() {
       const value = this.rect || { left: 0, top: 0, width: Number.parseFloat(this.style.width) || 94, height: Number.parseFloat(this.style.height) || 138 };
       return { ...value, x: value.left, y: value.top, right: value.left + value.width, bottom: value.top + value.height };
@@ -177,6 +180,11 @@ export async function loadClient({ width = 1440, height = 900, indexedDB, storag
     let stopped = false;
     const event = { target, type, button: 0, pointerId: 1, pointerType: "mouse", clientX: 0, clientY: 0, key: "", shiftKey: false, ctrlKey: false, metaKey: false, altKey: false,
       preventDefault() { this.defaultPrevented = true; }, stopPropagation() { stopped = true; }, ...options };
+    const ancestors = []; for (let node = target; node; node = node.parentElement) ancestors.unshift(node);
+    for (const node of ancestors) {
+      if (stopped) break;
+      for (const callback of node.captureEvents.get(type) || []) { event.currentTarget = node; await callback(event); }
+    }
     let node = target;
     while (node && !stopped) { for (const callback of node.events.get(type) || []) { event.currentTarget = node; await callback(event); } node = node.parentElement; }
     if (!stopped) for (const callback of listeners.get(type) || []) { event.currentTarget = context; await callback(event); }

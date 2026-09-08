@@ -116,7 +116,7 @@ kbd { font: 11px/1.5 var(--body); border: 1px solid currentColor; border-radius:
 .mobile-player i { position: absolute; width: 6px; height: 6px; border-radius: 50%; bottom: -1px; right: -1px; background: #849085; border: 1px solid var(--chrome); }
 .mobile-player i.is-online { background: #c7e998; }
 .table-stage { grid-row: 2; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
-.viewport { position: absolute; inset: 0; overflow: hidden; touch-action: none; background-color: var(--felt); background-image: radial-gradient(circle, #d1e0c716 .65px, transparent .8px); background-size: var(--grid-size, 32px) var(--grid-size, 32px); background-position: var(--grid-x, 0) var(--grid-y, 0); cursor: grab; }
+.viewport { position: absolute; inset: 0; overflow: clip; touch-action: none; background-color: var(--felt); background-image: radial-gradient(circle, #d1e0c716 .65px, transparent .8px); background-size: var(--grid-size, 32px) var(--grid-size, 32px); background-position: var(--grid-x, 0) var(--grid-y, 0); cursor: grab; }
 .viewport.is-panning { cursor: grabbing; }
 .world { position: absolute; top: 0; left: 0; width: 1800px; height: 1100px; transform-origin: 0 0; will-change: transform; overflow: visible; }
 .world-border { display: none; }
