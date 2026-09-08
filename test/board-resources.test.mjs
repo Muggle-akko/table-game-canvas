@@ -85,6 +85,46 @@ for (const [mode, core] of [["server", server], ["browser", browser]]) {
     }
   });
 
+  test(`${mode}: the aeroplane reference has a continuous colored loop and four correctly directed cross-board flights`, () => {
+    const flight = core.BOARD_LAYOUTS.aeroplane;
+    const reference = {
+      red: { airport: [0, 13], from: [5.5, 4.5], to: [11.5, 4.5], crosses: "green" },
+      yellow: { airport: [0, 0], from: [12.5, 5.5], to: [12.5, 11.5], crosses: "blue" },
+      green: { airport: [13, 0], from: [11.5, 12.5], to: [5.5, 12.5], crosses: "red" },
+      blue: { airport: [13, 13], from: [4.5, 11.5], to: [4.5, 5.5], crosses: "yellow" }
+    };
+    assert.equal(flight.track.length, 52);
+    assert.equal(flight.track.filter((tile) => tile.polygon.length === 3).length, 16, "outer and inner corners are actual triangular cells");
+    for (const [index, tile] of flight.track.entries()) {
+      const next = flight.track[(index + 1) % 52];
+      const shared = tile.polygon.filter((a) => next.polygon.some((b) => a[0] === b[0] && a[1] === b[1]));
+      assert.equal(shared.length, 2, `track cells ${index + 1} and ${(index + 1) % 52 + 1} share a complete edge`);
+      assert.equal(tile.side, ["blue", "red", "yellow", "green"][index % 4]);
+      assert.ok(tile.polygon.every(([x, y]) => x >= 0 && y >= 0 && x <= 17 && y <= 17));
+      const signs = tile.polygon.map(([x, y], vertex) => {
+        const [nx, ny] = tile.polygon[(vertex + 1) % tile.polygon.length];
+        return (nx - x) * (tile.center[1] - y) - (ny - y) * (tile.center[0] - x);
+      });
+      assert.ok(signs.every((value) => value > 0) || signs.every((value) => value < 0), "each landing spot is inside its colored cell");
+    }
+    for (const team of flight.teams) {
+      const expected = reference[team.side], [from, to] = team.flight.map((index) => flight.path[index]);
+      assert.deepEqual(plain(team.airport), expected.airport);
+      assert.deepEqual(plain(from), expected.from); assert.deepEqual(plain(to), expected.to);
+      assert.equal((team.flight[1] - team.flight[0] + 52) % 52, 12);
+      assert.equal(flight.track[team.flight[0]].side, team.side); assert.equal(flight.track[team.flight[1]].side, team.side);
+      assert.equal(flight.track[team.entry].side, team.side);
+      const midpoint = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
+      assert.deepEqual(midpoint, plain(flight.teams.find((other) => other.side === expected.crosses).home[2]));
+      const pieces = core.BOARD_GAME_SETS.find((set) => set.id === "aeroplane").members.filter((piece) => piece.resourceId === `plane-${team.side}`);
+      for (const [index, piece] of pieces.entries()) {
+        const [x, y] = flight.airportSlots[index];
+        assert.equal(piece.x + 31, flight.inset + (team.airport[0] + x) * flight.cell);
+        assert.equal(piece.y + 31, flight.inset + (team.airport[1] + y) * flight.cell);
+      }
+    }
+  });
+
   test(`${mode}: pieces can be moved, copied and bagged without enforcing game rules`, () => {
     const { command, state, guest } = fixture();
     command({ type: "spawn-set", setId: "chess", x: 0, y: 0 });

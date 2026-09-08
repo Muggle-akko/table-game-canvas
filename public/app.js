@@ -1273,29 +1273,91 @@ function renderSelectionTransfer(resource, preserveRecipient = false) {
   elements.selectionSend.disabled = !app.connectionOpen || resourceDropPending(resource.type, resource.value.id) || options.length === 0;
 }
 
+function renderGroupSelectionDock() {
+  app.selection.items = app.selection.items.filter((ref) => tableResource(ref));
+  if (!app.selection.items.length) { clearSelection({ preserveIntent: true }); return; }
+  const resources = app.selection.items.map(tableResource);
+  const cardsOnly = resources.every(({ type }) => type === "card" || type === "deck");
+  const tokensOnly = resources.every(({ type }) => type === "token");
+  const count = cardsOnly ? resources.reduce((sum, { type, value }) => sum + (type === "deck" ? value.count : 1), 0) : resources.length;
+  const locked = resources.some(({ value }) => value.locked);
+  const bagHasContents = resources.some(({ value }) => value.kind === "bag" && value.count > 0);
+  const pending = app.pendingCommands.has("selection-operation") || resources.some(({ type, value }) => resourceDropPending(type, value.id));
+  const busy = !app.connectionOpen || pending, cannotMove = busy || locked;
+  const resourceKey = `group:${JSON.stringify(app.selection.items)}`;
+  const sameSelection = elements.selectionDock.dataset.resourceKey === resourceKey;
+  const wasOpen = sameSelection && elements.selectionActions.querySelector(".selection-more")?.hasAttribute("open");
+  const focused = sameSelection && elements.selectionActions.contains(document.activeElement) ? document.activeElement : null;
+  const focusedAction = focused?.dataset.selectionAction;
+  const actions = [], secondary = [];
+  const add = (target, action, icon, label, disabled = false, title = label) => {
+    const button = makeSelectionAction(action, icon, label, { disabled }); button.title = title; target.push(button);
+  };
+  if (cardsOnly || tokensOnly) {
+    add(actions, "group-gather", "stack", "合成一叠", cannotMove || count < 2);
+    if (cardsOnly) add(actions, "group-shuffle", "shuffle", "洗牌", cannotMove || count < 2, "把选中的牌合成一叠后洗牌，保留每张牌的正反面");
+    add(actions, tokensOnly ? "group-spread-grid" : "group-spread-row", "arrows-out-line-horizontal", tokensOnly ? "展开" : "横向展开", cannotMove || count < 2);
+    if (cardsOnly) {
+      add(secondary, "group-face-up", "eye", "全部正面", busy || !count);
+      add(secondary, "group-face-down", "eye-slash", "全部背面", busy || !count);
+    }
+    add(secondary, "group-spread-column", "arrows-out-line-horizontal", "纵向展开", cannotMove || count < 2);
+    add(secondary, tokensOnly ? "group-spread-row" : "group-spread-grid", "corners-out", tokensOnly ? "横向展开" : "网格展开", cannotMove || count < 2);
+  }
+  add(actions, "group-return", "package", "收回资源库", cannotMove || bagHasContents,
+    bagHasContents ? "袋内还有物件，请先取出或移出多选" : "收回所选物件，保留资源模板与编辑内容");
+  const controls = cardsOnly || tokensOnly ? secondary : actions;
+  add(controls, "group-lock", "hand-grabbing", locked ? "解锁全部" : "锁定全部", busy);
+  add(controls, "focus-selection", "corners-out", "聚焦所选", pending);
+  let more;
+  if (secondary.length) {
+    more = document.createElement("details"); more.className = "selection-more";
+    const summary = document.createElement("summary"); summary.textContent = "更多"; summary.setAttribute("aria-label", "更多批量操作");
+    const menu = document.createElement("div"); menu.className = "selection-more-menu"; menu.append(...secondary);
+    more.append(summary, menu); if (wasOpen) more.setAttribute("open", ""); actions.push(more);
+  }
+  elements.selectionDock.classList.remove("is-hidden");
+  elements.selectionDock.dataset.resourceKey = resourceKey;
+  elements.selectionTitle.textContent = cardsOnly ? `已选 ${count} 张牌` : `已选 ${resources.length} 件物件`;
+  elements.selectionMeta.textContent = pending ? "正在处理这批物件…" : locked ? "含锁定物件 · 可统一解锁" : "Shift 点选增减 · Esc 取消";
+  elements.selectionActions.replaceChildren(...actions);
+  if (focusedAction) {
+    const next = elements.selectionActions.querySelector(`[data-selection-action="${focusedAction}"]`);
+    (next && !next.disabled ? next : more?.querySelector("summary"))?.focus({ preventScroll: true });
+  } else if (focused?.tagName === "SUMMARY") more?.querySelector("summary")?.focus({ preventScroll: true });
+  elements.selectionTransfer.classList.add("is-hidden");
+  syncSelectionClasses();
+}
+
+function runGroupSelectionAction(action) {
+  const resources = app.selection.items.map(tableResource).filter(Boolean);
+  if (!app.connectionOpen || app.pendingCommands.has("selection-operation") || app.drag || app.pan || app.marquee
+      || !resources.length || resources.some(({ type, value }) => resourceDropPending(type, value.id))) return;
+  let command;
+  if (action === "group-return") command = { type: "return-resources" };
+  else if (action === "group-gather") command = { type: "gather-resources" };
+  else if (action === "group-shuffle") command = { type: "shuffle-resources" };
+  else if (action.startsWith("group-spread-")) command = { type: "spread-resources", layout: action.slice("group-spread-".length) };
+  else if (["group-face-up", "group-face-down"].includes(action)) command = { type: "flip-resources", faceUp: action === "group-face-up" };
+  else if (action === "group-lock") command = { type: "lock-resources", locked: !resources.some(({ value }) => value.locked) };
+  else return;
+  command.resources = resources.map(({ type, value }) => ({ type, id: value.id, x: value.x, y: value.y,
+    ...(type === "deck" ? { count: value.count, topId: value.top?.id || null } : {}) }));
+  const intent = app.selectionIntent, gameId = app.state.room.gameId, playerId = app.state.you.id;
+  elements.selectionActions.querySelector(".selection-more")?.removeAttribute("open");
+  void sendCommand(command, { withReceipt: true, pendingKey: "selection-operation" }).then((receipt) => {
+    if (!receipt || app.selectionIntent !== intent || app.state?.room.gameId !== gameId || app.state?.you.id !== playerId) return;
+    if (Array.isArray(receipt.selectedResources)) setGroupSelection(receipt.selectedResources, { preserveIntent: true });
+  });
+}
+
 function renderSelectionDock() {
   if (!app.state || !app.selection) {
     elements.selectionDock.classList.add("is-hidden");
     return;
   }
   if (app.selection.type === "group") {
-    app.selection.items = app.selection.items.filter((ref) => tableResource(ref));
-    if (!app.selection.items.length) { clearSelection({ preserveIntent: true }); return; }
-    const resources = app.selection.items.map(tableResource);
-    const locked = resources.some(({ value }) => value.locked);
-    const pending = resources.some(({ type, value }) => resourceDropPending(type, value.id));
-    elements.selectionDock.classList.remove("is-hidden");
-    elements.selectionDock.dataset.resourceKey = "group";
-    elements.selectionTitle.textContent = `已选 ${resources.length} 件物件`;
-    elements.selectionMeta.textContent = locked ? "含锁定物件 · Shift 点击可移出多选" : pending ? "正在确认落点…" : "Shift 点选增减 · Esc 取消";
-    const hint = document.createElement("span"); hint.className = "selection-hint";
-    hint.textContent = locked ? "先解锁或移出锁定物件" : "拖动任一选中物件，一起移动";
-    const focused = elements.selectionActions.contains(document.activeElement) && document.activeElement.dataset.selectionAction;
-    const focus = makeSelectionAction("focus-selection", "corners-out", "聚焦所选", { disabled: pending });
-    elements.selectionActions.replaceChildren(focus, hint);
-    if (focused === "focus-selection") focus.focus({ preventScroll: true });
-    elements.selectionTransfer.classList.add("is-hidden");
-    syncSelectionClasses();
+    renderGroupSelectionDock();
     return;
   }
   const resource = selectedResource();
@@ -1407,6 +1469,7 @@ function renderSelectionDock() {
 
 function runSelectionAction(action) {
   if (action === "focus-selection") { focusSelection(); return; }
+  if (app.selection?.type === "group") { runGroupSelectionAction(action); return; }
   const resource = selectedResource();
   if (!resource || !app.state || resourceDropPending(resource.type, resource.value.id)) return;
   if (action === "signal-card") { void feedback.requestCard(resource.value); return; }
@@ -2068,6 +2131,8 @@ function renderTools() {
   const offlineGuests = app.state.players.filter((player) => player.role === "guest" && !player.online);
   const pending = (type) => app.pendingCommands.has(type);
   const deck = activeDeck();
+  const deckPending = resourceDropPending("deck", deck.id);
+  const selectionPending = pending("selection-operation");
   const maximumDeal = Number(elements.dealCount.dataset.maximum) || 0;
   elements.rollDie.disabled = !connected || pending("roll-die");
   elements.decrementCounter.disabled = !connected || pending("adjust-counter") || counter.value <= counter.min;
@@ -2077,19 +2142,19 @@ function renderTools() {
   elements.nextTurn.disabled = !connected || !canPassTurn || pending("advance-turn");
   elements.passTurn.disabled = elements.nextTurn.disabled;
   elements.nextTurn.textContent = app.state.turn?.activePlayerId === app.state.you.id ? "结束回合" : "下一位";
-  elements.undoTable.disabled = !connected || !isHost || !app.state.canUndo || pending("undo");
-  elements.drawCard.disabled = !connected || !deck.canDraw || pending("draw");
-  elements.dealCount.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each");
-  elements.dealCards.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each");
-  elements.shuffleDeck.disabled = !connected || deck.count < 2 || pending("shuffle");
-  elements.quickUndo.disabled = !connected || !isHost || !app.state.canUndo || pending("undo");
+  elements.undoTable.disabled = !connected || !isHost || !app.state.canUndo || pending("undo") || selectionPending;
+  elements.drawCard.disabled = !connected || !deck.canDraw || pending("draw") || deckPending;
+  elements.dealCount.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each") || deckPending;
+  elements.dealCards.disabled = !connected || !isHost || maximumDeal < 1 || pending("deal-each") || deckPending;
+  elements.shuffleDeck.disabled = !connected || deck.count < 2 || pending("shuffle") || deckPending;
+  elements.quickUndo.disabled = elements.undoTable.disabled;
   elements.quickUndo.title = isHost ? "撤销上一步 · U" : "由房主撤销操作";
   elements.shuffleDeck.querySelector("strong").textContent = "洗选中牌盒";
   elements.drawCard.title = `从「${deck.label || "起始牌盒"}」抽牌`;
   const publicCardCount = app.state.cards.filter((card) => card.zone === "public").length;
-  elements.tidyPublic.disabled = !connected || !isHost || publicCardCount < 1 || pending("tidy-public");
-  elements.collectPublic.disabled = !connected || !isHost || publicCardCount < 1 || pending("collect-public");
-  elements.resetTable.disabled = !connected || !isHost || pending("reset");
+  elements.tidyPublic.disabled = !connected || !isHost || publicCardCount < 1 || pending("tidy-public") || selectionPending;
+  elements.collectPublic.disabled = !connected || !isHost || publicCardCount < 1 || pending("collect-public") || selectionPending;
+  elements.resetTable.disabled = !connected || !isHost || pending("reset") || selectionPending;
   elements.pingLocation.disabled = !connected;
   elements.offlineSeatCount.textContent = `${offlineGuests.length} 离线`;
   elements.offlineSeatCount.classList.toggle("is-complete", offlineGuests.length === 0);
@@ -3247,8 +3312,10 @@ async function sendCommand(command, { withReceipt = false, pendingKey = command.
     toast("正在连接牌桌，请稍后再试。");
     return false;
   }
-  if (app.pendingCommands.has(pendingKey)) return false;
+  const resourceKeys = Array.isArray(command.resources) ? [...new Set(command.resources.map((ref) => `drop:${ref.type}:${ref.id}`))] : [];
+  if ([pendingKey, ...resourceKeys].some((key) => app.pendingCommands.has(key))) return false;
   app.pendingCommands.add(pendingKey);
+  resourceKeys.forEach((key) => app.pendingCommands.add(key));
   if (app.state) renderTools();
   try {
     const viewerId = app.state?.you.id;
@@ -3264,6 +3331,7 @@ async function sendCommand(command, { withReceipt = false, pendingKey = command.
     return false;
   } finally {
     app.pendingCommands.delete(pendingKey);
+    resourceKeys.forEach((key) => app.pendingCommands.delete(key));
     if (app.state) renderTools();
   }
 }
@@ -3522,7 +3590,7 @@ elements.objectsRoot.addEventListener("click", (event) => {
   if (ignoreTableActivation(event) || event.shiftKey || event.target.closest(".is-group-selected")) return;
   const button = event.target.closest("[data-object-action]");
   const node = button?.closest("[data-object-id]");
-  if (!node) return;
+  if (!node || resourceDropPending("object", node.dataset.objectId)) return;
   void sendCommand({ type: "adjust-resource", resourceType: "object", resourceId: node.dataset.objectId, delta: button.dataset.objectAction === "minus" ? -1 : 1 });
 });
 elements.objectsRoot.addEventListener("dblclick", (event) => {
@@ -3530,7 +3598,7 @@ elements.objectsRoot.addEventListener("dblclick", (event) => {
   if (event.target.closest("button")) return;
   const node = event.target.closest(".world-object[data-object-id]");
   const object = app.state?.objects?.find((item) => item.id === node?.dataset.objectId);
-  if (!object) return;
+  if (!object || resourceDropPending("object", object.id)) return;
   if (object.kind === "mat" && !event.target.closest("[data-mat-handle]")) return;
   selectResource("object", object.id);
   workspace.handleAction(object.kind === "die" ? "roll-object" : object.kind === "bag" ? "bag-draw" : "edit-object", selectedResource());
@@ -3551,7 +3619,7 @@ elements.deckRoot.addEventListener("dblclick", (event) => {
   if (ignoreTableActivation(event) || event.shiftKey || event.target.closest(".is-group-selected")) return;
   if (event.target.closest("[data-deck-action]")) return;
   const node = event.target.closest(".deck-stack");
-  if (node) void sendCommand({ type: "draw", deckId: node.dataset.deckId });
+  if (node && !resourceDropPending("deck", node.dataset.deckId)) void sendCommand({ type: "draw", deckId: node.dataset.deckId });
 });
 
 for (const surface of [elements.cardsRoot, elements.handCards, elements.tokenRoot, elements.deckRoot, elements.objectsRoot]) {

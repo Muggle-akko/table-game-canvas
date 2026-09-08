@@ -75,55 +75,65 @@
     for (let col = 0; col < 7; col++) label(svg, inset + (col + .5) * cell, spec.height - 24, "ABCDEFG"[col], { "font-size": 14 });
   }
 
-  function arrow(svg, from, to, color, width = 3) {
-    line(svg, from[0], from[1], to[0], to[1], { stroke: color, "stroke-width": width, "stroke-linecap": "round" });
-    const angle = Math.atan2(to[1] - from[1], to[0] - from[0]), size = 10;
-    const points = [to, [to[0] - size * Math.cos(angle - .5), to[1] - size * Math.sin(angle - .5)], [to[0] - size * Math.cos(angle + .5), to[1] - size * Math.sin(angle + .5)]];
-    add(svg, "polygon", { points: points.map((point) => point.join(",")).join(" "), fill: color });
+  const planePath = "M29 7q3-6 6 0l2 17 20 13v6L37 36l-1 14 8 6v4l-12-4-12 4v-4l8-6-1-14-20 7v-6l20-13z";
+  function aircraft(svg, [x, y], heading, color, size = 28) {
+    return add(svg, "path", { d: planePath, fill: color, transform: `translate(${x} ${y}) rotate(${heading}) scale(${size / 64}) translate(-32 -32)` });
+  }
+  function flightArrow(svg, [x, y], heading, color) {
+    add(svg, "path", { d: "M0 -13 12 -1H5V12H-5V-1H-12Z", fill: color, transform: `translate(${x} ${y}) rotate(${heading})` });
   }
 
   function aeroplaneBoard(svg, spec) {
-    const { inset, cell, teams, path } = spec, point = ([col, row]) => [inset + (col + .5) * cell, inset + (row + .5) * cell];
+    const { inset, cell, teams, path, track, airportSlots } = spec;
+    const point = ([col, row]) => [inset + col * cell, inset + row * cell];
+    const colors = Object.fromEntries(teams.map((team) => [team.side, team.color]));
+    const ink = "#273642", sky = "#9ed9ee", stock = "#fffef7";
+    const polygon = (points, fill, attrs = {}) => add(svg, "polygon", { points: points.map((p) => point(p).join(",")).join(" "), fill,
+      stroke: ink, "stroke-width": 2.5, "stroke-linejoin": "round", ...attrs });
+    const spot = ([cx, cy], attrs = {}) => add(svg, "circle", { cx, cy, r: cell * .32, fill: stock, stroke: ink, "stroke-width": 2, ...attrs });
+    add(svg, "rect", { width: spec.width, height: spec.height, rx: 14, fill: sky });
+    add(svg, "rect", { x: inset, y: inset, width: cell * 17, height: cell * 17, fill: "#fff3d0", stroke: ink, "stroke-width": 2.5 });
+    polygon([[6, 2], [11, 2], [11, 6], [15, 6], [15, 11], [11, 11], [11, 15], [6, 15], [6, 11], [2, 11], [2, 6], [6, 6]], sky, { stroke: "none" });
     for (const team of teams) {
-      const ax = inset + team.airport[0] * cell, ay = inset + team.airport[1] * cell;
-      add(svg, "rect", { x: ax, y: ay, width: cell * 4.5, height: cell * 4.5, rx: 26, fill: team.color, "fill-opacity": .1, stroke: team.color, "stroke-opacity": .3, "stroke-width": 2 });
-      label(svg, ax + cell * 2.25, ay + 35, `${team.label}机场`, { fill: team.color, "font-size": 20, "font-weight": 600 });
-      for (const [index, [x, y]] of [[.7, 1.1], [2.7, 1.1], [.7, 3.1], [2.7, 3.1]].entries()) {
-        const [cx, cy] = point([team.airport[0] + x, team.airport[1] + y]);
-        add(svg, "circle", { cx, cy, r: 35, fill: "#f7f2e4", stroke: team.color, "stroke-opacity": .5, "stroke-dasharray": "4 5", "data-airport-slot": `${team.side}:${index + 1}` });
-        label(svg, cx, cy + 6, index + 1, { fill: team.color, opacity: .5, "font-size": 18 });
+      const [x, y] = point(team.airport), [cx, cy] = point([team.airport[0] + 2, team.airport[1] + 2]);
+      add(svg, "rect", { x, y, width: cell * 4, height: cell * 4, fill: team.color, stroke: ink, "stroke-width": 2.5, "data-airport-side": team.side });
+      label(svg, cx, cy, "停机坪", { fill: team.side === "yellow" ? "#665000" : stock, "font-size": 22, "font-weight": 600,
+        "letter-spacing": 4, "dominant-baseline": "central", transform: `rotate(${team.heading} ${cx} ${cy})` });
+      for (const [index, [sx, sy]] of airportSlots.entries()) {
+        const center = point([team.airport[0] + sx, team.airport[1] + sy]);
+        spot(center, { "data-airport-slot": `${team.side}:${index + 1}` });
+        aircraft(svg, center, team.heading + 90, team.color, 30);
       }
+      polygon(team.homeShape, team.color, { "data-home-lane": team.side });
     }
-    add(svg, "path", { d: `${path.map((cell, i) => `${i ? "L" : "M"}${point(cell).join(" ")}`).join(" ")}Z`, fill: "none", stroke: "#728a78", "stroke-width": 12, opacity: .14 });
+    track.forEach((tile, index) => polygon(tile.polygon, colors[tile.side], { "data-track-cell": index + 1, "data-track-side": tile.side }));
     for (const team of teams) {
-      const fromIndex = (team.start + 16) % 52, toIndex = (team.start + 28) % 52;
-      const from = point(path[fromIndex]), to = point(path[toIndex]);
-      add(svg, "path", { d: `M${from.join(" ")}L${to.join(" ")}`, fill: "none", stroke: team.color, "stroke-width": 3, "stroke-dasharray": "7 7", opacity: .7,
+      const [fromIndex, toIndex] = team.flight, from = point(path[fromIndex]), to = point(path[toIndex]);
+      add(svg, "path", { d: `M${from.join(" ")}L${to.join(" ")}`, fill: "none", stroke: team.color, "stroke-width": 4, "stroke-dasharray": "3 6",
         "data-flight-from": fromIndex + 1, "data-flight-to": toIndex + 1, "data-flight-side": team.side });
-      label(svg, (from[0] + to[0]) / 2, (from[1] + to[1]) / 2 - 9, "飞", { fill: team.color, "font-size": 14 });
     }
-    path.forEach((position, index) => {
-      const [cx, cy] = point(position), color = teams[index % 4].color;
-      add(svg, "circle", { cx, cy, r: 26, fill: color, "fill-opacity": .15, stroke: color, "stroke-width": 2, "data-flight-step": index + 1 });
-      label(svg, cx, cy + 5, index + 1, { fill: color, "font-size": 13, "font-weight": 600 });
-    });
+    path.forEach((position, index) => spot(point(position), { "data-flight-step": index + 1 }));
     for (const team of teams) {
       team.home.forEach((position, index) => {
-        const [cx, cy] = point(position);
-        add(svg, "rect", { x: cx - 26, y: cy - 26, width: 52, height: 52, rx: 13, fill: team.color, "fill-opacity": index === 5 ? .8 : .3, stroke: team.color, "stroke-width": 2,
-          "data-home-side": team.side, "data-home-step": index + 1 });
-        label(svg, cx, cy + 5, index === 5 ? "终" : index + 1, { fill: index === 5 ? "#fff8e7" : team.color, "font-size": 16 });
+        const center = point(position);
+        spot(center, { "data-home-side": team.side, "data-home-step": index + 1 });
+        if (index === 5) aircraft(svg, center, team.heading, team.color, 30);
       });
-      const gate = point(team.gate), start = point(path[team.start]), next = point(path[team.start + 1]);
-      add(svg, "circle", { cx: gate[0], cy: gate[1], r: 26, fill: team.color, "fill-opacity": .8, "data-takeoff-side": team.side });
-      label(svg, gate[0], gate[1] + 5, "起飞", { fill: "#fff8e7", "font-size": 13, "font-weight": 600 });
-      const dx = start[0] - gate[0], dy = start[1] - gate[1], length = Math.hypot(dx, dy);
-      arrow(svg, [gate[0] + dx / length * 31, gate[1] + dy / length * 31], [start[0] - dx / length * 31, start[1] - dy / length * 31], team.color);
-      arrow(svg, [start[0] + (next[0] - start[0]) * .44, start[1] + (next[1] - start[1]) * .44], [start[0] + (next[0] - start[0]) * .58, start[1] + (next[1] - start[1]) * .58], team.color, 2);
+      flightArrow(svg, point(path[team.entry]), team.heading, team.color);
+      const gate = point(team.gate);
+      spot(gate, { r: cell * .43, "data-takeoff-side": team.side, "data-takeoff-to": team.start + 1 });
+      aircraft(svg, [gate[0], gate[1] - 5], team.heading, team.color, 28);
+      label(svg, gate[0], gate[1] + 18, "起飞", { fill: team.side === "yellow" ? "#806300" : team.color, "font-size": 12, "font-weight": 700 });
     }
-    const center = point([7, 7]);
-    add(svg, "path", { d: `M${center[0]} ${center[1] - 15}l4 11 11 4 -11 4 -4 11 -4 -11 -11 -4 11 -4z`, fill: "#a49c70" });
-    label(svg, spec.width / 2, spec.height - 27, "52 格环路 · 顺编号前进", { "font-size": 14, fill: "#748172", "letter-spacing": 2 });
+    for (const team of teams) {
+      const [fromIndex, toIndex] = team.flight, from = point(path[fromIndex]), to = point(path[toIndex]);
+      const heading = Math.atan2(to[1] - from[1], to[0] - from[0]) * 180 / Math.PI + 90;
+      flightArrow(svg, from, heading, team.color); flightArrow(svg, to, heading, team.color);
+      for (const fraction of [.25, .5, .75]) aircraft(svg, [from[0] + (to[0] - from[0]) * fraction, from[1] + (to[1] - from[1]) * fraction], heading, team.color, 28);
+    }
+    const center = point([8.5, 8.5]);
+    spot(center, { r: cell * .3 });
+    label(svg, center[0], center[1] + 4, "终点", { fill: ink, "font-size": 12, "font-weight": 700 });
   }
 
   function board(pattern) {
@@ -175,7 +185,8 @@
   function decorateToken(container, token) {
     const piece = token.piece; if (!piece || !layouts[piece.game] || token.hasImage) return false;
     container.dataset.pieceGame = piece.game; container.dataset.pieceSide = piece.side;
-    const ink = piece.game === "xiangqi" ? piece.side === "r" ? "#b84b3d" : "#314438" : piece.game === "chess" && piece.side === "w" ? "#304538" : "#fff6df";
+    const ink = piece.game === "xiangqi" ? piece.side === "r" ? "#b84b3d" : "#314438" : piece.game === "chess" && piece.side === "w" ? "#304538"
+      : piece.game === "aeroplane" && piece.side === "yellow" ? "#665000" : "#fff6df";
     container.style.setProperty("--piece-ink", ink); container.style.setProperty("--piece-stock", token.color);
     if (piece.game === "xiangqi") {
       const character = document.createElement("b"); character.className = "piece-hanzi"; character.textContent = token.symbol; container.append(character);
@@ -183,7 +194,7 @@
       const glyph = svgNode("svg", { viewBox: "0 0 64 64", class: "piece-glyph", "aria-hidden": "true", focusable: "false" });
       if (piece.game === "chess") chessGlyph(glyph, piece.role);
       if (piece.game === "jungle") animalGlyph(glyph, piece.role);
-      if (piece.game === "aeroplane") add(glyph, "path", { d: "M29 7q3-6 6 0l2 17 20 13v6L37 36l-1 14 8 6v4l-12-4-12 4v-4l8-6-1-14-20 7v-6l20-13z", fill: "currentColor" });
+      if (piece.game === "aeroplane") add(glyph, "path", { d: planePath, fill: "currentColor" });
       container.append(glyph);
       if (piece.game === "jungle") {
         const name = document.createElement("b"); name.className = "piece-animal-name"; name.textContent = token.symbol;

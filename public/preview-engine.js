@@ -88,7 +88,7 @@
 
   function applyCommand(model, viewerId, command, { now = Date.now(), withReceipt = false } = {}) {
     const room = model.engineRoom;
-    let createdResource;
+    let createdResource, selectedResources;
     if (command.type === "replace-pack") core.replaceRoomPack(room, viewerId, getPack(command.packId));
     else if (command.type === "add-pack") createdResource = { type: "deck", id: core.addRoomPack(room, viewerId, getPack(command.packId), command) };
     else if (command.type === "import-pack") {
@@ -100,9 +100,9 @@
       core.restoreRoomGame(room, viewerId, command.game);
       for (const player of room.players.values()) player.connections = 1;
     }
-    else createdResource = core.applyCommand(room, viewerId, command)?.createdResource;
+    else ({ createdResource, selectedResources } = core.applyCommand(room, viewerId, command) || {});
     const state = project(model, viewerId, now);
-    return withReceipt ? { ok: true, revision: state.revision, state, ...(createdResource ? { createdResource } : {}) } : state;
+    return withReceipt ? { ok: true, revision: state.revision, state, ...(createdResource ? { createdResource } : {}), ...(selectedResources ? { selectedResources } : {}) } : state;
   }
 
   root.ParlorPreview = Object.freeze({ createModel, restoreModel, project, applyCommand, PreviewError: core.RoomError });

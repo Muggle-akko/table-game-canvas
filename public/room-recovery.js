@@ -77,7 +77,7 @@
     }
     const persistPendingFallback = () => writeSession(pendingKey(), [...pending.values()].map(({ record }) => record));
     const commandPendingKeys = (record) => [record.pendingKey || record.message.command.type,
-      ...(record.message.command.type === "move-resources" ? (record.message.command.resources || []).map((ref) => `drop:${ref.type}:${ref.id}`) : [])];
+      ...(Array.isArray(record.message.command.resources) ? record.message.command.resources.map((ref) => `drop:${ref.type}:${ref.id}`) : [])];
     const markPending = (record, active) => { for (const key of commandPendingKeys(record)) app.pendingCommands[active ? "add" : "delete"](key); };
     const notifyPending = () => ui.onPendingChange?.(pending.size);
     const schedule = () => {

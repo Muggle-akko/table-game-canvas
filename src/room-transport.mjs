@@ -223,6 +223,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
     const previous = receiptKey ? room.commandReceipts.get(receiptKey) : null;
     if (previous && previous.fingerprint !== fingerprint) throw new RoomError("COMMAND_ID_REUSED", "这次操作编号已被用于另一项操作，请刷新页面。", 409);
     let createdResource = previous?.createdResource;
+    let selectedResources = previous?.selectedResources;
     if (!previous) {
       if (message.gameId && message.gameId !== room.gameId) throw new RoomError("GAME_CHANGED", "房主已经切换对局，这次旧操作没有执行。", 409);
       if (message.epoch && message.epoch !== room.epoch) throw new RoomError("GAME_CHANGED", "房主已经撤销操作或恢复存档，这次旧操作没有执行。", 409);
@@ -241,9 +242,9 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
         validateRoomGame(command.game);
         await persistence?.backup();
         restoreRoomGame(room, player.id, command.game);
-      } else createdResource = applyCommand(room, player.id, command)?.createdResource;
+      } else ({ createdResource, selectedResources } = applyCommand(room, player.id, command) || {});
       if (receiptKey) {
-        room.commandReceipts.set(receiptKey, { fingerprint, revision: room.revision, ...(createdResource ? { createdResource } : {}) });
+        room.commandReceipts.set(receiptKey, { fingerprint, revision: room.revision, ...(createdResource ? { createdResource } : {}), ...(selectedResources ? { selectedResources } : {}) });
         while (room.commandReceipts.size > 1024) {
           const oldest = room.commandReceipts.keys().next().value;
           room.receiptFloorRevision = Math.max(room.receiptFloorRevision, room.commandReceipts.get(oldest).revision);
@@ -259,7 +260,7 @@ export function createRoomTransport(room, { loadAsset = null, loadPack = null, p
     return {
       ok: true, revision: room.revision, duplicate: Boolean(previous), durable: Boolean(persistence),
       ...(room.players.has(playerId) ? { state: projectRoom(room, playerId) } : {}),
-      ...(createdResource ? { createdResource } : {})
+      ...(createdResource ? { createdResource } : {}), ...(selectedResources ? { selectedResources } : {})
     };
     });
   };

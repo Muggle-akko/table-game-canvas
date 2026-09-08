@@ -16,18 +16,44 @@ const freezeBoardData = (value) => {
   return value;
 };
 
-const flightPath = [
-  [6, 13], [6, 12], [6, 11], [6, 10], [6, 9], [5, 8], [4, 8], [3, 8], [2, 8], [1, 8], [0, 8], [0, 7], [0, 6],
-  [1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 5], [6, 4], [6, 3], [6, 2], [6, 1], [6, 0], [7, 0], [8, 0],
-  [8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [9, 6], [10, 6], [11, 6], [12, 6], [13, 6], [14, 6], [14, 7], [14, 8],
-  [13, 8], [12, 8], [11, 8], [10, 8], [9, 8], [8, 9], [8, 10], [8, 11], [8, 12], [8, 13], [8, 14], [7, 14], [6, 14]
+// The printed board uses a 17-unit square with rectangular and diagonal track
+// cells. Coordinates are geometric centers, including half-unit corner turns.
+const rotateFlightPoint = ([x, y], turns) => {
+  for (let turn = 0; turn < turns; turn++) [x, y] = [17 - y, x];
+  return [x, y];
+};
+const flightQuarter = [
+  [[5.5, 15.5], [[4, 15], [6, 15], [6, 17]]],
+  [[5, 14.5], [[4, 14], [6, 14], [6, 15], [4, 15]]],
+  [[5, 13.5], [[4, 13], [6, 13], [6, 14], [4, 14]]],
+  [[5.5, 12.5], [[4, 13], [6, 11], [6, 13]]],
+  [[4.5, 11.5], [[4, 11], [6, 11], [4, 13]]],
+  [[3.5, 12], [[3, 11], [4, 11], [4, 13], [3, 13]]],
+  [[2.5, 12], [[2, 11], [3, 11], [3, 13], [2, 13]]],
+  [[1.5, 11.5], [[0, 11], [2, 11], [2, 13]]],
+  [[1, 10.5], [[0, 10], [2, 10], [2, 11], [0, 11]]],
+  [[1, 9.5], [[0, 9], [2, 9], [2, 10], [0, 10]]],
+  [[1, 8.5], [[0, 8], [2, 8], [2, 9], [0, 9]]],
+  [[1, 7.5], [[0, 7], [2, 7], [2, 8], [0, 8]]],
+  [[1, 6.5], [[0, 6], [2, 6], [2, 7], [0, 7]]]
 ];
+const flightTrack = Array.from({ length: 4 }, (_, turn) => flightQuarter.map(([center, polygon], index) => ({
+  center: rotateFlightPoint(center, turn), polygon: polygon.map((point) => rotateFlightPoint(point, turn)),
+  side: ["blue", "red", "yellow", "green"][(turn * 13 + index) % 4]
+}))).flat();
+const flightPath = flightTrack.map((tile) => tile.center);
+const flightAirportSlots = [[1.1, 1.1], [2.9, 1.1], [1.1, 2.9], [2.9, 2.9]];
 const flightTeams = [
-  { side: "red", label: "红", color: "#bd5549", start: 0, gate: [5, 14], airport: [1, 10], home: Array.from({ length: 6 }, (_, i) => [7, 13 - i]) },
-  { side: "yellow", label: "黄", color: "#bb8b32", start: 13, gate: [0, 5], airport: [1, 1], home: Array.from({ length: 6 }, (_, i) => [1 + i, 7]) },
-  { side: "blue", label: "蓝", color: "#4d7fa3", start: 26, gate: [9, 0], airport: [10, 1], home: Array.from({ length: 6 }, (_, i) => [7, 1 + i]) },
-  { side: "green", label: "绿", color: "#4b8267", start: 39, gate: [14, 9], airport: [10, 10], home: Array.from({ length: 6 }, (_, i) => [13 - i, 7]) }
-];
+  { side: "red", label: "红", color: "#ef2639", airport: [0, 13] },
+  { side: "yellow", label: "黄", color: "#ffd21c", airport: [0, 0] },
+  { side: "green", label: "绿", color: "#009d57", airport: [13, 0] },
+  { side: "blue", label: "蓝", color: "#078fc9", airport: [13, 13] }
+].map((team, turn) => ({
+  ...team, heading: turn * 90, start: turn * 13, gate: rotateFlightPoint([4.6, 16.4], turn),
+  entry: (49 + turn * 13) % 52, flight: [(17 + turn * 13) % 52, (29 + turn * 13) % 52],
+  home: Array.from({ length: 6 }, (_, i) => rotateFlightPoint([8.5, 14.5 - i], turn)),
+  homeShape: [[8, 15], [9, 15], [9, 10], [10, 10], [8.5, 8.5], [7, 10], [8, 10]].map((point) => rotateFlightPoint(point, turn))
+}));
 
 const BOARD_LAYOUTS = freezeBoardData({
   chess: { width: 832, height: 832, inset: 64, cell: 88, columns: 8, rows: 8 },
@@ -35,14 +61,15 @@ const BOARD_LAYOUTS = freezeBoardData({
   jungle: { width: 744, height: 920, inset: 64, cell: 88, columns: 7, rows: 9,
     rivers: [[1, 3], [2, 3], [4, 3], [5, 3], [1, 4], [2, 4], [4, 4], [5, 4], [1, 5], [2, 5], [4, 5], [5, 5]],
     dens: [[3, 0], [3, 8]], traps: [[2, 0], [4, 0], [3, 1], [2, 8], [4, 8], [3, 7]] },
-  aeroplane: { width: 1120, height: 1120, inset: 80, cell: 64, columns: 15, rows: 15, path: flightPath, teams: flightTeams }
+  aeroplane: { width: 1120, height: 1120, inset: 33, cell: 62, columns: 17, rows: 17,
+    path: flightPath, track: flightTrack, teams: flightTeams, airportSlots: flightAirportSlots }
 });
 
 const boardMats = [
   { id: "board-chess", game: "chess", label: "国际象棋棋盘", color: "#e9dec4" },
   { id: "board-xiangqi", game: "xiangqi", label: "象棋棋盘", color: "#ecddbc" },
   { id: "board-jungle", game: "jungle", label: "斗兽棋棋盘", color: "#e4e4cc" },
-  { id: "board-aeroplane", game: "aeroplane", label: "飞行棋棋盘", color: "#eeeadb" }
+  { id: "board-aeroplane", game: "aeroplane", label: "飞行棋棋盘", color: "#9ed9ee" }
 ].map((board) => ({ ...board, kind: "mat", pattern: board.game, width: BOARD_LAYOUTS[board.game].width, height: BOARD_LAYOUTS[board.game].height, description: "可单独取用与自由摆放的棋盘" }));
 
 const chessRoles = [
@@ -76,7 +103,7 @@ const boardGuides = [
   { game: "chess", label: "国际象棋规则指引", text: "国际象棋 · 常见玩法\n\n准备｜白方先行。棋盘右下角为浅格，后放在与己方同色的格子。双方各 16 子。\n\n走法｜王走一格；后沿横、直、斜线；车走横直；象走斜线；马走日字，可跳子。兵向前一格、斜前吃子，起始可走两格，到底线可升变。\n\n特殊｜王车易位、吃过路兵与升变由玩家自行执行；升变可从资源库取出相应棋子。\n\n将军｜王受攻击时需要应将；被将死为负。逼和、重复局面与五十步等和棋条件可开局约定。\n\n操作｜拖走被吃棋子，再移动自己的棋子。可把吃掉的子放到盘外或收纳袋。棋盘不限制落点，也不判定胜负。" },
   { game: "xiangqi", label: "象棋规则指引", text: "象棋 · 常见玩法\n\n准备｜红方先行，双方各 16 子。棋子放在线的交点上。\n\n走法｜车走直线；马走日字，留意蹩马腿；象走田字，不过河，留意塞象眼；士走斜线一格，在九宫内；将帅在九宫内走直线一格。\n\n炮兵｜炮平移不越子，吃子须隔一子。兵卒向前一格，过河后也能左右走，不能后退。\n\n将军｜将帅不能直接照面，受将需应将；将死或困毙通常为负。长将、长捉等按同桌约定。\n\n操作｜双方自行移动、吃子和计时。吃掉的棋子可拖到盘外或袋子。此牌可双击改写。" },
   { game: "jungle", label: "斗兽棋规则指引", text: "斗兽棋 · 常见玩法\n\n等级｜象 8、狮 7、虎 6、豹 5、狼 4、狗 3、猫 2、鼠 1。一般大吃小、同级互吃，鼠能吃象、象不能吃鼠。\n\n地形｜普通陆地横直走一格；只有鼠能下河。狮虎可直线跳过河，河中有鼠挡路则不能跳。河岸间能否吃子开局约定。\n\n陷阱｜进入敌方陷阱通常失去等级保护；离开恢复。自己的兽穴不能进入，进入对方兽穴通常获胜。\n\n操作｜自行走子、吃子和回合交接。棋盘上标出河流、陷阱与双方兽穴，不限制任何移动。" },
-  { game: "aeroplane", label: "飞行棋规则指引", text: "飞行棋 · 常见玩法\n\n准备｜每人选一种颜色，四架飞机放在机场。掷骰后自行移动，起飞点数开局约定，常见为掷出 6。\n\n路线｜先到机场旁的起飞点，再沿箭头进入 52 格环路，按编号方向前进；绕行后从本色入口进入 6 格终点航道。\n\n跳跃｜落在同色格常可跳 4 格；虚线标出同色飞跃的起止格，相距 12 格。连跳顺序与终点反弹可按同桌习惯约定。\n\n碰面｜撞机、叠机、奖励掷骰等由玩家商定与操作；不自动击退任何飞机。\n\n胜利｜常以四架飞机全部抵达终点为胜。用桌上六面骰掷点，自己移动飞机、交接回合。这张指引可编辑。" }
+  { game: "aeroplane", label: "飞行棋规则指引", text: "飞行棋 · 常见玩法\n\n准备｜每人选一种颜色，四架飞机放在停机坪。掷骰后自行移动，起飞点数开局约定，常见为掷出 6。\n\n路线｜先到停机坪旁的起飞点，再沿顺时针方向进入 52 格环路；绕行后从本色入口进入 6 格终点航道。\n\n跳跃｜落在同色格常可跳 4 格；虚线箭头标出跨越 12 格的飞行路线，经过异色终点航道。连跳顺序与终点反弹可按同桌习惯约定。\n\n碰面｜撞机、叠机、奖励掷骰等由玩家商定与操作；不自动击退任何飞机。\n\n胜利｜常以四架飞机全部抵达终点为胜。用桌上六面骰掷点，自己移动飞机、交接回合。这张指引可编辑。" }
 ].map((guide) => ({ ...guide, id: `guide-${guide.game}`, kind: "note", description: "常见玩法参考，可双击编辑", width: 400, height: 640, color: "#eee5cf" }));
 
 const BOARD_RESOURCES = freezeBoardData([...boardMats, ...boardGuides, ...chessPieces, ...xiangqiPieces, ...junglePieces, ...aircraftPieces]);
@@ -104,8 +131,8 @@ const jungleSetup = ["b", "r"].flatMap((side) => [
   ["lion", 0, 0], ["tiger", 6, 0], ["dog", 1, 1], ["cat", 5, 1],
   ["rat", 0, 2], ["leopard", 2, 2], ["wolf", 4, 2], ["elephant", 6, 2]
 ].map(([role, col, row]) => pieceOnBoard("jungle", `jungle-${side}-${role}`, side === "b" ? col : 6 - col, side === "b" ? row : 8 - row)));
-const flightSetup = flightTeams.flatMap((team) => [[.7, 1.1], [2.7, 1.1], [.7, 3.1], [2.7, 3.1]].map(([x, y]) =>
-  pieceOnBoard("aeroplane", `plane-${team.side}`, team.airport[0] + x, team.airport[1] + y)));
+const flightSetup = flightTeams.flatMap((team) => flightAirportSlots.map(([x, y]) =>
+  pieceOnBoard("aeroplane", `plane-${team.side}`, team.airport[0] + x, team.airport[1] + y, true)));
 
 const BOARD_GAME_SETS = freezeBoardData([
   { id: "chess", label: "国际象棋", players: "2 人", description: "棋盘 · 32 枚棋子 · 规则指引", pieces: chessSetup, keywords: "chess 国际 西洋" },
@@ -1185,7 +1212,7 @@ function requireControllableResource(room, actor, type, id) {
 
 function tableSelectionResources(room, references) {
   if (!Array.isArray(references) || !references.length || references.length > 1800) {
-    throw new RoomError("INVALID_SELECTION", "请先选择要移动的桌面物件。");
+    throw new RoomError("INVALID_SELECTION", "请先选择要整理的桌面物件。");
   }
   const selected = new Map();
   for (const ref of references) {
@@ -1194,7 +1221,7 @@ function tableSelectionResources(room, references) {
     }
     const { resource } = requireResource(room, ref.type, ref.id);
     if (ref.type === "card" && resource.zone !== "public") {
-      throw new RoomError("PRIVATE_SELECTION", "批量整理只移动桌面物件，手牌请单独操作。", 403);
+      throw new RoomError("PRIVATE_SELECTION", "批量整理只处理桌面物件，手牌请单独操作。", 403);
     }
     selected.set(`${ref.type}:${ref.id}`, { type: ref.type, value: resource });
   }
@@ -1242,18 +1269,172 @@ function resourceFromPreset(preset, point) {
   return object;
 }
 
+function selectionOriginsUnchanged(room, references) {
+  for (const ref of references) {
+    const { resource } = requireResource(room, ref.type, ref.id);
+    if ((ref.x !== undefined || ref.y !== undefined)
+        && (!Number.isFinite(ref.x) || !Number.isFinite(ref.y) || Math.abs(ref.x - resource.x) > .001 || Math.abs(ref.y - resource.y) > .001)
+        || (ref.type === "deck" && ((ref.count !== undefined && ref.count !== resource.order.length)
+          || (ref.topId !== undefined && ref.topId !== (resource.order.at(-1) || null))))) {
+      throw new RoomError("SELECTION_CHANGED", "选中的物件已发生变化，请确认后重新操作。", 409);
+    }
+  }
+}
+
+function selectionCards(room, resources) {
+  if (resources.some(({ type }) => !["card", "deck"].includes(type))) throw new RoomError("CARDS_ONLY", "这项操作需要选中的物件都是牌。");
+  return resources.flatMap(({ type, value }) => type === "deck" ? value.order.map((id) => requireCard(room, id)) : [value]);
+}
+
+function resourceTemplate(room, actor, type, resource, cards = [], label = resource.label) {
+  const copy = structuredClone(resource);
+  copy.locked = false;
+  if (type === "deck") { copy.hidden = false; copy.order = cards.map((card) => card.id); }
+  return {
+    id: `saved_${randomUUID().replaceAll("-", "")}`, label: cleanName(label, "收回的资源"),
+    kind: type === "deck" ? "deck" : resource.kind || "token", type, resource: copy, creatorId: actor.id,
+    cards: cards.map((card) => ({ ...structuredClone(card), deckId: resource.id, zone: "deck", ownerId: null, x: null, y: null, z: 0, handOrder: 0,
+      source: structuredClone(cardSource(room, card)) })),
+    count: type === "deck" ? cards.length : 1
+  };
+}
+
+function templateSignature(template) {
+  const omit = (value, fields) => Object.fromEntries(Object.entries(value).filter(([key]) => !fields.includes(key)));
+  const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
+  return JSON.stringify(canonical({ type: template.type, label: template.label,
+    resource: omit(template.resource, ["id", "x", "y", "z", "homeX", "homeY", "locked", "rollId", "order"]),
+    cards: template.cards.map((card) => JSON.stringify(canonical(omit(card, ["id", "deckId", "zone", "ownerId", "x", "y", "z", "handOrder", "locked"])))).sort()
+  }));
+}
+
+function planLibraryReturn(room, actor, resources) {
+  const templates = [], cards = new Map(), decks = new Map();
+  const known = new Set([...room.templates.values()].map(templateSignature));
+  const keep = (template, preset) => {
+    const signature = templateSignature(template);
+    if (known.has(signature)) return;
+    if (preset && signature === templateSignature(resourceTemplate(room, actor, template.type, resourceFromPreset(preset, { x: 0, y: 0 })))) return;
+    known.add(signature); templates.push(template);
+  };
+  for (const { type, value } of resources) {
+    if (type === "card") cards.set(value.id, value);
+    else if (type === "deck") {
+      decks.set(value.id, value);
+      for (const id of value.order) cards.set(id, requireCard(room, id));
+    } else {
+      if (value.kind === "bag" && value.contents.length) throw new RoomError("BAG_NOT_EMPTY", "袋子里还有物件，先取出内容再收回资源库。", 409);
+      keep(resourceTemplate(room, actor, type, value), RESOURCE_CATALOG.find((preset) => preset.id === value.resourceId));
+    }
+  }
+  const cardGroups = new Map();
+  for (const card of cards.values()) {
+    assertUnlocked(card);
+    if (!cardGroups.has(card.deckId)) cardGroups.set(card.deckId, []);
+    cardGroups.get(card.deckId).push(card);
+  }
+  for (const [id, members] of cardGroups) {
+    const deck = room.decks.get(id);
+    keep(resourceTemplate(room, actor, "deck", deck, members, decks.has(id) ? deck.label : `${deck.label} · 散牌`));
+  }
+  if (room.templates.size + templates.length > 40) throw new RoomError("LIBRARY_FULL", "资源库空间不足以保留这批物件，请先移除不用的收藏。", 409);
+  return { templates, cards, decks };
+}
+
+function retireMergedDeck(room, source, destination) {
+  source.order = [];
+  for (const card of room.cards.values()) if (card.deckId === source.id) {
+    card.source = structuredClone(cardSource(room, card));
+    card.deckId = destination.id;
+  }
+  if (source.id === "main") source.hidden = true;
+  else room.decks.delete(source.id);
+}
+
+function applySelectionCommand(room, actor, command) {
+  if (!["return-resources", "gather-resources", "shuffle-resources", "spread-resources", "flip-resources", "lock-resources"].includes(command.type)) return false;
+  const resources = tableSelectionResources(room, command.resources);
+  selectionOriginsUnchanged(room, command.resources);
+  const refs = (members) => members.map(({ type, value }) => ({ type, id: value.id }));
+  const commit = (label, selectedResources, effect) => {
+    addHistory(room, actor, label, effect ? { effect } : {}); touch(room);
+    return { ...(selectedResources ? { selectedResources } : {}) };
+  };
+  if (command.type === "lock-resources") {
+    if (typeof command.locked !== "boolean") throw new RoomError("INVALID_LOCK", "请选择锁定或解锁。");
+    if (resources.every(({ value }) => Boolean(value.locked) === command.locked)) return true;
+    saveUndoPoint(room);
+    resources.forEach(({ value }) => { value.locked = command.locked; });
+    return commit(`${command.locked ? "锁定" : "解锁"}了 ${resources.length} 件物件`);
+  }
+  if (command.type === "flip-resources") {
+    const cards = selectionCards(room, resources);
+    if (typeof command.faceUp !== "boolean") throw new RoomError("INVALID_FACE", "请选择正面或背面。");
+    if (!cards.length || cards.every((card) => card.faceUp === command.faceUp)) return true;
+    saveUndoPoint(room);
+    cards.forEach((card) => { card.faceUp = command.faceUp; });
+    return commit(`将 ${cards.length} 张牌统一翻到${command.faceUp ? "正面" : "背面"}`);
+  }
+  resources.forEach(({ value }) => assertUnlocked(value));
+  if (command.type === "return-resources") {
+    const plan = planLibraryReturn(room, actor, resources);
+    saveUndoPoint(room);
+    for (const template of plan.templates) room.templates.set(template.id, template);
+    for (const id of plan.cards.keys()) room.cards.delete(id);
+    for (const deck of plan.decks.values()) { deck.order = []; deck.hidden = true; }
+    for (const { type, value } of resources) if (type === "token" || type === "object") (type === "token" ? room.tokens : room.objects).delete(value.id);
+    // Empty hidden homes stay available while an unselected hand or bag still uses them.
+    const inUse = new Set([...room.cards.values()].map((card) => card.deckId));
+    for (const deck of room.decks.values()) if (deck.id !== "main" && deck.hidden && !inUse.has(deck.id)) room.decks.delete(deck.id);
+    return commit(`将 ${resources.length} 件物件收回了资源库`, []);
+  }
+  const tokensOnly = resources.every(({ type }) => type === "token");
+  const cards = tokensOnly ? [] : selectionCards(room, resources);
+  const members = tokensOnly ? resources.map(({ value }) => value) : cards;
+  if (command.type === "shuffle-resources" && tokensOnly) throw new RoomError("CARDS_ONLY", "只有卡牌可以洗牌。");
+  if (members.length < 2) throw new RoomError("SELECTION_TOO_SMALL", "至少选择两张牌或两枚棋子、筹码。", 409);
+  members.forEach(assertUnlocked);
+  const selectedDecks = resources.filter(({ type }) => type === "deck").map(({ value }) => value);
+  const targetDeck = selectedDecks.at(-1), anchor = { ...(targetDeck || resources.at(-1).value) };
+  if (command.type === "spread-resources") {
+    const positions = spreadStackPositions([...members].reverse(), command.layout || "row", anchor, tokensOnly ? { width: TABLE_GEOMETRY.tokenSize, height: TABLE_GEOMETRY.tokenSize } : null);
+    const planned = positions.map(({ card, x, y }) => ({ type: tokensOnly ? "token" : "card", value: { ...card, x, y } }));
+    const { dx, dy } = tableSelectionDelta(planned, 0, 0);
+    saveUndoPoint(room);
+    selectedDecks.forEach((deck) => { deck.order = []; });
+    positions.forEach(({ card, x, y }) => Object.assign(card, { x: x + dx, y: y + dy, z: room.nextZ++ }, tokensOnly ? {} : { zone: "public", ownerId: null, handOrder: 0 }));
+    return commit(`展开了选中的 ${members.length} ${tokensOnly ? "枚物件" : "张牌"}`, members.map((value) => ({ type: tokensOnly ? "token" : "card", id: value.id })));
+  }
+  if (targetDeck) {
+    saveUndoPoint(room);
+    const ordered = command.type === "shuffle-resources" ? shuffled(cards) : cards;
+    targetDeck.order = [];
+    putCardsOnDeck(room, targetDeck, ordered);
+    selectedDecks.filter((deck) => deck !== targetDeck).forEach((deck) => retireMergedDeck(room, deck, targetDeck));
+    if (command.type === "shuffle-resources") { rekeyCards(room, ordered); targetDeck.order = ordered.map((card) => card.id); }
+    targetDeck.z = room.nextZ++;
+    return commit(`${command.type === "shuffle-resources" ? "合并并洗了" : "合叠了"} ${cards.length} 张牌`, [{ type: "deck", id: targetDeck.id }], command.type === "shuffle-resources" ? { type: "shuffle", x: anchor.x, y: anchor.y } : null);
+  }
+  const ordered = command.type === "shuffle-resources" ? shuffled(members) : members;
+  const positions = ordered.map((value, index) => ({ type: tokensOnly ? "token" : "card", value: { ...value,
+    x: anchor.x + (tokensOnly ? 0 : Math.min(index, 4) * .8),
+    y: anchor.y + (tokensOnly ? Math.min(members.length - 1 - index, 6) * 2 : Math.min(index, 4) * .8) } }));
+  const { dx, dy } = tableSelectionDelta(positions, 0, 0);
+  saveUndoPoint(room);
+  if (command.type === "shuffle-resources") rekeyCards(room, ordered);
+  ordered.forEach((value, index) => Object.assign(value, { x: positions[index].value.x + dx, y: positions[index].value.y + dy, z: room.nextZ++ }));
+  return commit(`${command.type === "shuffle-resources" ? "合叠并洗了" : "合叠了"} ${members.length} ${tokensOnly ? "枚物件" : "张牌"}`, refs(ordered.map((value) => ({ type: tokensOnly ? "token" : "card", value }))), command.type === "shuffle-resources" ? { type: "shuffle", x: anchor.x + dx, y: anchor.y + dy } : null);
+}
+
 function applyResourceCommand(room, actor, command) {
+  const selectionResult = applySelectionCommand(room, actor, command);
+  if (selectionResult) return selectionResult;
   const commit = (label, createdResource) => { addHistory(room, actor, label); touch(room); return createdResource ? { createdResource } : true; };
   if (command.type === "move-resources") {
     const resources = tableSelectionResources(room, command.resources);
     resources.forEach(({ value }) => assertUnlocked(value));
-    for (const ref of command.resources) {
-      if (ref.x === undefined && ref.y === undefined) continue;
-      const { resource } = requireResource(room, ref.type, ref.id);
-      if (!Number.isFinite(ref.x) || !Number.isFinite(ref.y) || Math.abs(ref.x - resource.x) > .001 || Math.abs(ref.y - resource.y) > .001) {
-        throw new RoomError("SELECTION_CHANGED", "选中的物件已被移动，请重新拖动。", 409);
-      }
-    }
+    selectionOriginsUnchanged(room, command.resources);
     const { dx, dy } = tableSelectionDelta(resources, command.dx, command.dy);
     if (!dx && !dy) return true;
     saveUndoPoint(room);
@@ -1341,15 +1522,7 @@ function applyResourceCommand(room, actor, command) {
     }
     putCardsOnDeck(room, deck, sourceCards);
     if (sourceDeck && sourceDeck !== deck) {
-      sourceDeck.order = [];
-      // Cards outside the merged pile also need a valid place to return to.
-      for (const card of room.cards.values()) if (card.deckId === sourceDeck.id) {
-        const source = cardSource(room, card);
-        card.source = { packId: source.packId, back: structuredClone(source.back) };
-        card.deckId = deck.id;
-      }
-      if (sourceDeck.id === "main") sourceDeck.hidden = true;
-      else room.decks.delete(sourceDeck.id);
+      retireMergedDeck(room, sourceDeck, deck);
     }
     return commit(`将 ${sourceCards.length} 张牌叠到了「${deck.label}」顶部`, { type: "deck", id: deck.id });
   }
@@ -1371,13 +1544,8 @@ function applyResourceCommand(room, actor, command) {
     if (command.resourceType === "card") throw new RoomError("SAVE_DECK", "先将卡牌收回牌盒，再保存整副牌。");
     if (resource.kind === "bag" && resource.contents.length) throw new RoomError("BAG_NOT_EMPTY", "先清空袋子，再存入资源库。");
     if (command.resourceType === "deck" && !resource.order.length) throw new RoomError("DECK_EMPTY", "空牌盒不能保存为资源。", 409);
-    const template = {
-      id: `saved_${randomUUID().replaceAll("-", "")}`, label: cleanName(command.label, resource.label),
-      kind: command.resourceType === "deck" ? "deck" : resource.kind || "token",
-      type: command.resourceType, resource: structuredClone(resource), creatorId: actor.id,
-      cards: command.resourceType === "deck" ? resource.order.map((id) => structuredClone(room.cards.get(id))) : [],
-      count: command.resourceType === "deck" ? resource.order.length : 1
-    };
+    const template = resourceTemplate(room, actor, command.resourceType, resource,
+      command.resourceType === "deck" ? resource.order.map((id) => room.cards.get(id)) : [], command.label ?? resource.label);
     saveUndoPoint(room);
     room.templates.set(template.id, template);
     return commit(`将「${template.label}」存入资源库`);
@@ -2485,7 +2653,12 @@ function roomFromCheckpoint(checkpoint) {
     if (typeof key !== "string" || key.length > 200 || !receipt || !/^[a-f0-9]{64}$/.test(receipt.fingerprint || "") || !Number.isSafeInteger(receipt.revision)) throw new RoomError("INVALID_CHECKPOINT", "操作回执格式无效。");
     const created = receipt.createdResource;
     if (created && (!["card", "deck", "token", "object"].includes(created.type) || typeof created.id !== "string" || !/^[\w-]{1,80}$/.test(created.id))) throw new RoomError("INVALID_CHECKPOINT", "物件回执格式无效。");
-    room.commandReceipts.set(key, { fingerprint: receipt.fingerprint, revision: receipt.revision, ...(created ? { createdResource: { type: created.type, id: created.id } } : {}) });
+    const selected = receipt.selectedResources;
+    if (selected !== undefined && (!Array.isArray(selected) || selected.length > 1800 || selected.some((ref) => !ref || !["card", "deck", "token", "object"].includes(ref.type) || typeof ref.id !== "string" || !/^[\w-]{1,80}$/.test(ref.id)))) {
+      throw new RoomError("INVALID_CHECKPOINT", "多选回执格式无效。");
+    }
+    room.commandReceipts.set(key, { fingerprint: receipt.fingerprint, revision: receipt.revision, ...(created ? { createdResource: { type: created.type, id: created.id } } : {}),
+      ...(selected ? { selectedResources: selected.map(({ type, id }) => ({ type, id })) } : {}) });
   }
   room.history = loaded.history;
   room.messages = loaded.messages;

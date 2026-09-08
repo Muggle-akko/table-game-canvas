@@ -1067,7 +1067,7 @@ function requireControllableResource(room, actor, type, id) {
 
 export function tableSelectionResources(room, references) {
   if (!Array.isArray(references) || !references.length || references.length > 1800) {
-    throw new RoomError("INVALID_SELECTION", "请先选择要移动的桌面物件。");
+    throw new RoomError("INVALID_SELECTION", "请先选择要整理的桌面物件。");
   }
   const selected = new Map();
   for (const ref of references) {
@@ -1076,7 +1076,7 @@ export function tableSelectionResources(room, references) {
     }
     const { resource } = requireResource(room, ref.type, ref.id);
     if (ref.type === "card" && resource.zone !== "public") {
-      throw new RoomError("PRIVATE_SELECTION", "批量整理只移动桌面物件，手牌请单独操作。", 403);
+      throw new RoomError("PRIVATE_SELECTION", "批量整理只处理桌面物件，手牌请单独操作。", 403);
     }
     selected.set(`${ref.type}:${ref.id}`, { type: ref.type, value: resource });
   }
@@ -1124,18 +1124,172 @@ function resourceFromPreset(preset, point) {
   return object;
 }
 
+function selectionOriginsUnchanged(room, references) {
+  for (const ref of references) {
+    const { resource } = requireResource(room, ref.type, ref.id);
+    if ((ref.x !== undefined || ref.y !== undefined)
+        && (!Number.isFinite(ref.x) || !Number.isFinite(ref.y) || Math.abs(ref.x - resource.x) > .001 || Math.abs(ref.y - resource.y) > .001)
+        || (ref.type === "deck" && ((ref.count !== undefined && ref.count !== resource.order.length)
+          || (ref.topId !== undefined && ref.topId !== (resource.order.at(-1) || null))))) {
+      throw new RoomError("SELECTION_CHANGED", "选中的物件已发生变化，请确认后重新操作。", 409);
+    }
+  }
+}
+
+function selectionCards(room, resources) {
+  if (resources.some(({ type }) => !["card", "deck"].includes(type))) throw new RoomError("CARDS_ONLY", "这项操作需要选中的物件都是牌。");
+  return resources.flatMap(({ type, value }) => type === "deck" ? value.order.map((id) => requireCard(room, id)) : [value]);
+}
+
+function resourceTemplate(room, actor, type, resource, cards = [], label = resource.label) {
+  const copy = structuredClone(resource);
+  copy.locked = false;
+  if (type === "deck") { copy.hidden = false; copy.order = cards.map((card) => card.id); }
+  return {
+    id: `saved_${randomUUID().replaceAll("-", "")}`, label: cleanName(label, "收回的资源"),
+    kind: type === "deck" ? "deck" : resource.kind || "token", type, resource: copy, creatorId: actor.id,
+    cards: cards.map((card) => ({ ...structuredClone(card), deckId: resource.id, zone: "deck", ownerId: null, x: null, y: null, z: 0, handOrder: 0,
+      source: structuredClone(cardSource(room, card)) })),
+    count: type === "deck" ? cards.length : 1
+  };
+}
+
+function templateSignature(template) {
+  const omit = (value, fields) => Object.fromEntries(Object.entries(value).filter(([key]) => !fields.includes(key)));
+  const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
+  return JSON.stringify(canonical({ type: template.type, label: template.label,
+    resource: omit(template.resource, ["id", "x", "y", "z", "homeX", "homeY", "locked", "rollId", "order"]),
+    cards: template.cards.map((card) => JSON.stringify(canonical(omit(card, ["id", "deckId", "zone", "ownerId", "x", "y", "z", "handOrder", "locked"])))).sort()
+  }));
+}
+
+function planLibraryReturn(room, actor, resources) {
+  const templates = [], cards = new Map(), decks = new Map();
+  const known = new Set([...room.templates.values()].map(templateSignature));
+  const keep = (template, preset) => {
+    const signature = templateSignature(template);
+    if (known.has(signature)) return;
+    if (preset && signature === templateSignature(resourceTemplate(room, actor, template.type, resourceFromPreset(preset, { x: 0, y: 0 })))) return;
+    known.add(signature); templates.push(template);
+  };
+  for (const { type, value } of resources) {
+    if (type === "card") cards.set(value.id, value);
+    else if (type === "deck") {
+      decks.set(value.id, value);
+      for (const id of value.order) cards.set(id, requireCard(room, id));
+    } else {
+      if (value.kind === "bag" && value.contents.length) throw new RoomError("BAG_NOT_EMPTY", "袋子里还有物件，先取出内容再收回资源库。", 409);
+      keep(resourceTemplate(room, actor, type, value), RESOURCE_CATALOG.find((preset) => preset.id === value.resourceId));
+    }
+  }
+  const cardGroups = new Map();
+  for (const card of cards.values()) {
+    assertUnlocked(card);
+    if (!cardGroups.has(card.deckId)) cardGroups.set(card.deckId, []);
+    cardGroups.get(card.deckId).push(card);
+  }
+  for (const [id, members] of cardGroups) {
+    const deck = room.decks.get(id);
+    keep(resourceTemplate(room, actor, "deck", deck, members, decks.has(id) ? deck.label : `${deck.label} · 散牌`));
+  }
+  if (room.templates.size + templates.length > 40) throw new RoomError("LIBRARY_FULL", "资源库空间不足以保留这批物件，请先移除不用的收藏。", 409);
+  return { templates, cards, decks };
+}
+
+function retireMergedDeck(room, source, destination) {
+  source.order = [];
+  for (const card of room.cards.values()) if (card.deckId === source.id) {
+    card.source = structuredClone(cardSource(room, card));
+    card.deckId = destination.id;
+  }
+  if (source.id === "main") source.hidden = true;
+  else room.decks.delete(source.id);
+}
+
+function applySelectionCommand(room, actor, command) {
+  if (!["return-resources", "gather-resources", "shuffle-resources", "spread-resources", "flip-resources", "lock-resources"].includes(command.type)) return false;
+  const resources = tableSelectionResources(room, command.resources);
+  selectionOriginsUnchanged(room, command.resources);
+  const refs = (members) => members.map(({ type, value }) => ({ type, id: value.id }));
+  const commit = (label, selectedResources, effect) => {
+    addHistory(room, actor, label, effect ? { effect } : {}); touch(room);
+    return { ...(selectedResources ? { selectedResources } : {}) };
+  };
+  if (command.type === "lock-resources") {
+    if (typeof command.locked !== "boolean") throw new RoomError("INVALID_LOCK", "请选择锁定或解锁。");
+    if (resources.every(({ value }) => Boolean(value.locked) === command.locked)) return true;
+    saveUndoPoint(room);
+    resources.forEach(({ value }) => { value.locked = command.locked; });
+    return commit(`${command.locked ? "锁定" : "解锁"}了 ${resources.length} 件物件`);
+  }
+  if (command.type === "flip-resources") {
+    const cards = selectionCards(room, resources);
+    if (typeof command.faceUp !== "boolean") throw new RoomError("INVALID_FACE", "请选择正面或背面。");
+    if (!cards.length || cards.every((card) => card.faceUp === command.faceUp)) return true;
+    saveUndoPoint(room);
+    cards.forEach((card) => { card.faceUp = command.faceUp; });
+    return commit(`将 ${cards.length} 张牌统一翻到${command.faceUp ? "正面" : "背面"}`);
+  }
+  resources.forEach(({ value }) => assertUnlocked(value));
+  if (command.type === "return-resources") {
+    const plan = planLibraryReturn(room, actor, resources);
+    saveUndoPoint(room);
+    for (const template of plan.templates) room.templates.set(template.id, template);
+    for (const id of plan.cards.keys()) room.cards.delete(id);
+    for (const deck of plan.decks.values()) { deck.order = []; deck.hidden = true; }
+    for (const { type, value } of resources) if (type === "token" || type === "object") (type === "token" ? room.tokens : room.objects).delete(value.id);
+    // Empty hidden homes stay available while an unselected hand or bag still uses them.
+    const inUse = new Set([...room.cards.values()].map((card) => card.deckId));
+    for (const deck of room.decks.values()) if (deck.id !== "main" && deck.hidden && !inUse.has(deck.id)) room.decks.delete(deck.id);
+    return commit(`将 ${resources.length} 件物件收回了资源库`, []);
+  }
+  const tokensOnly = resources.every(({ type }) => type === "token");
+  const cards = tokensOnly ? [] : selectionCards(room, resources);
+  const members = tokensOnly ? resources.map(({ value }) => value) : cards;
+  if (command.type === "shuffle-resources" && tokensOnly) throw new RoomError("CARDS_ONLY", "只有卡牌可以洗牌。");
+  if (members.length < 2) throw new RoomError("SELECTION_TOO_SMALL", "至少选择两张牌或两枚棋子、筹码。", 409);
+  members.forEach(assertUnlocked);
+  const selectedDecks = resources.filter(({ type }) => type === "deck").map(({ value }) => value);
+  const targetDeck = selectedDecks.at(-1), anchor = { ...(targetDeck || resources.at(-1).value) };
+  if (command.type === "spread-resources") {
+    const positions = spreadStackPositions([...members].reverse(), command.layout || "row", anchor, tokensOnly ? { width: TABLE_GEOMETRY.tokenSize, height: TABLE_GEOMETRY.tokenSize } : null);
+    const planned = positions.map(({ card, x, y }) => ({ type: tokensOnly ? "token" : "card", value: { ...card, x, y } }));
+    const { dx, dy } = tableSelectionDelta(planned, 0, 0);
+    saveUndoPoint(room);
+    selectedDecks.forEach((deck) => { deck.order = []; });
+    positions.forEach(({ card, x, y }) => Object.assign(card, { x: x + dx, y: y + dy, z: room.nextZ++ }, tokensOnly ? {} : { zone: "public", ownerId: null, handOrder: 0 }));
+    return commit(`展开了选中的 ${members.length} ${tokensOnly ? "枚物件" : "张牌"}`, members.map((value) => ({ type: tokensOnly ? "token" : "card", id: value.id })));
+  }
+  if (targetDeck) {
+    saveUndoPoint(room);
+    const ordered = command.type === "shuffle-resources" ? shuffled(cards) : cards;
+    targetDeck.order = [];
+    putCardsOnDeck(room, targetDeck, ordered);
+    selectedDecks.filter((deck) => deck !== targetDeck).forEach((deck) => retireMergedDeck(room, deck, targetDeck));
+    if (command.type === "shuffle-resources") { rekeyCards(room, ordered); targetDeck.order = ordered.map((card) => card.id); }
+    targetDeck.z = room.nextZ++;
+    return commit(`${command.type === "shuffle-resources" ? "合并并洗了" : "合叠了"} ${cards.length} 张牌`, [{ type: "deck", id: targetDeck.id }], command.type === "shuffle-resources" ? { type: "shuffle", x: anchor.x, y: anchor.y } : null);
+  }
+  const ordered = command.type === "shuffle-resources" ? shuffled(members) : members;
+  const positions = ordered.map((value, index) => ({ type: tokensOnly ? "token" : "card", value: { ...value,
+    x: anchor.x + (tokensOnly ? 0 : Math.min(index, 4) * .8),
+    y: anchor.y + (tokensOnly ? Math.min(members.length - 1 - index, 6) * 2 : Math.min(index, 4) * .8) } }));
+  const { dx, dy } = tableSelectionDelta(positions, 0, 0);
+  saveUndoPoint(room);
+  if (command.type === "shuffle-resources") rekeyCards(room, ordered);
+  ordered.forEach((value, index) => Object.assign(value, { x: positions[index].value.x + dx, y: positions[index].value.y + dy, z: room.nextZ++ }));
+  return commit(`${command.type === "shuffle-resources" ? "合叠并洗了" : "合叠了"} ${members.length} ${tokensOnly ? "枚物件" : "张牌"}`, refs(ordered.map((value) => ({ type: tokensOnly ? "token" : "card", value }))), command.type === "shuffle-resources" ? { type: "shuffle", x: anchor.x + dx, y: anchor.y + dy } : null);
+}
+
 function applyResourceCommand(room, actor, command) {
+  const selectionResult = applySelectionCommand(room, actor, command);
+  if (selectionResult) return selectionResult;
   const commit = (label, createdResource) => { addHistory(room, actor, label); touch(room); return createdResource ? { createdResource } : true; };
   if (command.type === "move-resources") {
     const resources = tableSelectionResources(room, command.resources);
     resources.forEach(({ value }) => assertUnlocked(value));
-    for (const ref of command.resources) {
-      if (ref.x === undefined && ref.y === undefined) continue;
-      const { resource } = requireResource(room, ref.type, ref.id);
-      if (!Number.isFinite(ref.x) || !Number.isFinite(ref.y) || Math.abs(ref.x - resource.x) > .001 || Math.abs(ref.y - resource.y) > .001) {
-        throw new RoomError("SELECTION_CHANGED", "选中的物件已被移动，请重新拖动。", 409);
-      }
-    }
+    selectionOriginsUnchanged(room, command.resources);
     const { dx, dy } = tableSelectionDelta(resources, command.dx, command.dy);
     if (!dx && !dy) return true;
     saveUndoPoint(room);
@@ -1223,15 +1377,7 @@ function applyResourceCommand(room, actor, command) {
     }
     putCardsOnDeck(room, deck, sourceCards);
     if (sourceDeck && sourceDeck !== deck) {
-      sourceDeck.order = [];
-      // Cards outside the merged pile also need a valid place to return to.
-      for (const card of room.cards.values()) if (card.deckId === sourceDeck.id) {
-        const source = cardSource(room, card);
-        card.source = { packId: source.packId, back: structuredClone(source.back) };
-        card.deckId = deck.id;
-      }
-      if (sourceDeck.id === "main") sourceDeck.hidden = true;
-      else room.decks.delete(sourceDeck.id);
+      retireMergedDeck(room, sourceDeck, deck);
     }
     return commit(`将 ${sourceCards.length} 张牌叠到了「${deck.label}」顶部`, { type: "deck", id: deck.id });
   }
@@ -1253,13 +1399,8 @@ function applyResourceCommand(room, actor, command) {
     if (command.resourceType === "card") throw new RoomError("SAVE_DECK", "先将卡牌收回牌盒，再保存整副牌。");
     if (resource.kind === "bag" && resource.contents.length) throw new RoomError("BAG_NOT_EMPTY", "先清空袋子，再存入资源库。");
     if (command.resourceType === "deck" && !resource.order.length) throw new RoomError("DECK_EMPTY", "空牌盒不能保存为资源。", 409);
-    const template = {
-      id: `saved_${randomUUID().replaceAll("-", "")}`, label: cleanName(command.label, resource.label),
-      kind: command.resourceType === "deck" ? "deck" : resource.kind || "token",
-      type: command.resourceType, resource: structuredClone(resource), creatorId: actor.id,
-      cards: command.resourceType === "deck" ? resource.order.map((id) => structuredClone(room.cards.get(id))) : [],
-      count: command.resourceType === "deck" ? resource.order.length : 1
-    };
+    const template = resourceTemplate(room, actor, command.resourceType, resource,
+      command.resourceType === "deck" ? resource.order.map((id) => room.cards.get(id)) : [], command.label ?? resource.label);
     saveUndoPoint(room);
     room.templates.set(template.id, template);
     return commit(`将「${template.label}」存入资源库`);
@@ -2367,7 +2508,12 @@ export function roomFromCheckpoint(checkpoint) {
     if (typeof key !== "string" || key.length > 200 || !receipt || !/^[a-f0-9]{64}$/.test(receipt.fingerprint || "") || !Number.isSafeInteger(receipt.revision)) throw new RoomError("INVALID_CHECKPOINT", "操作回执格式无效。");
     const created = receipt.createdResource;
     if (created && (!["card", "deck", "token", "object"].includes(created.type) || typeof created.id !== "string" || !/^[\w-]{1,80}$/.test(created.id))) throw new RoomError("INVALID_CHECKPOINT", "物件回执格式无效。");
-    room.commandReceipts.set(key, { fingerprint: receipt.fingerprint, revision: receipt.revision, ...(created ? { createdResource: { type: created.type, id: created.id } } : {}) });
+    const selected = receipt.selectedResources;
+    if (selected !== undefined && (!Array.isArray(selected) || selected.length > 1800 || selected.some((ref) => !ref || !["card", "deck", "token", "object"].includes(ref.type) || typeof ref.id !== "string" || !/^[\w-]{1,80}$/.test(ref.id)))) {
+      throw new RoomError("INVALID_CHECKPOINT", "多选回执格式无效。");
+    }
+    room.commandReceipts.set(key, { fingerprint: receipt.fingerprint, revision: receipt.revision, ...(created ? { createdResource: { type: created.type, id: created.id } } : {}),
+      ...(selected ? { selectedResources: selected.map(({ type, id }) => ({ type, id })) } : {}) });
   }
   room.history = loaded.history;
   room.messages = loaded.messages;
